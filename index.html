@@ -8,30 +8,39 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #f4f5f7;
       color: #222;
       padding: 16px;
     }
+    .container { max-width: 720px; margin: 0 auto; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .topbar h1 { margin: 0; font-size: 22px; }
+    .logout {
+      padding: 8px 14px;
+      font-size: 14px;
+      border: 1px solid #ccd0d5;
+      background: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
     .card {
       background: #fff;
       border-radius: 12px;
       padding: 28px 24px;
       width: 100%;
       max-width: 360px;
+      margin: 40px auto;
       box-shadow: 0 4px 16px rgba(0,0,0,0.08);
     }
-    h1 { margin: 0 0 20px; font-size: 22px; text-align: center; }
-    label {
-      display: block;
-      margin-bottom: 14px;
-      font-size: 14px;
-      color: #555;
-    }
+    .card h1 { margin: 0 0 20px; font-size: 22px; text-align: center; }
+    label { display: block; margin-bottom: 14px; font-size: 14px; color: #555; }
     input {
       display: block;
       width: 100%;
@@ -43,7 +52,7 @@
       outline: none;
     }
     input:focus { border-color: #4a80f5; }
-    button {
+    .card button {
       width: 100%;
       padding: 11px;
       font-size: 16px;
@@ -54,18 +63,54 @@
       cursor: pointer;
       margin-top: 6px;
     }
-    button:disabled { opacity: 0.6; cursor: default; }
-    .error {
-      margin: 12px 0 0;
-      font-size: 14px;
-      color: #c0392b;
-      min-height: 1.2em;
+    .card button:disabled { opacity: 0.6; cursor: default; }
+    .error { margin: 12px 0 0; font-size: 14px; color: #c0392b; min-height: 1.2em; }
+
+    .period {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
-    .muted { color: #777; font-size: 14px; text-align: center; }
+    .period-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #eef0f2;
+    }
+    .period-date { font-weight: 600; font-size: 16px; }
+    .period-balance { font-weight: 600; }
+    .period-balance.pos { color: #1e8e3e; }
+    .period-balance.neg { color: #c0392b; }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      padding: 3px 0;
+      color: #444;
+    }
+    .row.muted { color: #888; }
+
+    .items { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eef0f2; }
+    .item {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      padding: 4px 0;
+    }
+    .item-name { flex: 1; }
+    .item-perm { color: #888; font-size: 12px; margin-left: 6px; }
+    .item-amount { font-variant-numeric: tabular-nums; }
+    .empty { color: #888; font-size: 14px; padding: 20px 0; text-align: center; }
+    .loading { text-align: center; padding: 40px 0; color: #666; }
   </style>
 </head>
 <body>
-  <main id="app" class="card">Загрузка…</main>
+  <main id="app">Загрузка…</main>
 
   <script>
     const API = "https://budget-app-x2s2.onrender.com";
@@ -84,19 +129,32 @@
 
     const app = document.getElementById("app");
 
+    function fmtMoney(n) {
+      if (n == null) return "—";
+      return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return "";
+      const [y, m, d] = iso.split("-");
+      return `${d}.${m}.${y}`;
+    }
+
     function renderLogin(message) {
       app.innerHTML = `
-        <h1>Бюджет</h1>
-        <form id="login-form">
-          <label>Логин
-            <input id="login-user" type="text" autocomplete="username" required>
-          </label>
-          <label>Пароль
-            <input id="login-pass" type="password" autocomplete="current-password" required>
-          </label>
-          <button type="submit">Войти</button>
-          <p id="login-error" class="error">${message || ""}</p>
-        </form>
+        <div class="card">
+          <h1>Бюджет</h1>
+          <form id="login-form">
+            <label>Логин
+              <input id="login-user" type="text" autocomplete="username" required>
+            </label>
+            <label>Пароль
+              <input id="login-pass" type="password" autocomplete="current-password" required>
+            </label>
+            <button type="submit">Войти</button>
+            <p id="login-error" class="error">${message || ""}</p>
+          </form>
+        </div>
       `;
       const form = document.getElementById("login-form");
       const errP = document.getElementById("login-error");
@@ -114,7 +172,7 @@
             }),
           });
           if (ok && data && data.ok) {
-            renderLoggedIn();
+            renderBudget();
           } else {
             errP.textContent = (data && data.error) || ("Ошибка " + status);
           }
@@ -126,29 +184,87 @@
       });
     }
 
-    function renderLoggedIn() {
+    function renderPeriod(p) {
+      const balClass = p.balance >= 0 ? "pos" : "neg";
+      const itemsHtml = p.items.length
+        ? p.items.map(it => `
+            <div class="item">
+              <span class="item-name">${escapeHtml(it.name)}${it.permanent ? '<span class="item-perm">пост.</span>' : ""}</span>
+              <span class="item-amount">${fmtMoney(it.amount)}</span>
+            </div>
+          `).join("")
+        : `<div class="row muted">Нет статей</div>`;
+      return `
+        <div class="period">
+          <div class="period-head">
+            <span class="period-date">${fmtDate(p.pay_date)}</span>
+            <span class="period-balance ${balClass}">${p.balance >= 0 ? "+" : ""}${fmtMoney(p.balance)}</span>
+          </div>
+          <div class="row"><span>Зарплата</span><span>${fmtMoney(p.salary)}</span></div>
+          ${p.extra ? `<div class="row"><span>Доп. доход</span><span>${fmtMoney(p.extra)}</span></div>` : ""}
+          <div class="row"><span>Расходы</span><span>${fmtMoney(p.expenses)}</span></div>
+          <div class="items">${itemsHtml}</div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    function renderBudget() {
       app.innerHTML = `
-        <h1>Бюджет</h1>
-        <p class="muted">Вы вошли в приложение.</p>
-        <button id="logout">Выйти</button>
+        <div class="container">
+          <div class="topbar">
+            <h1>Бюджет</h1>
+            <button class="logout" id="logout">Выйти</button>
+          </div>
+          <div id="content" class="loading">Загрузка данных…</div>
+        </div>
       `;
       document.getElementById("logout").addEventListener("click", async () => {
         try { await api("/api/logout", { method: "POST" }); } catch (e) {}
         renderApp();
       });
+      loadPeriods();
+    }
+
+    async function loadPeriods() {
+      const content = document.getElementById("content");
+      try {
+        const { status, ok, data } = await api("/api/budget/periods");
+        if (status === 401) { renderLogin(); return; }
+        if (!ok || !data || !data.ok) {
+          content.className = "";
+          content.innerHTML = `<div class="empty">Ошибка: ${(data && data.error) || status}</div>`;
+          return;
+        }
+        const periods = (data.data && data.data.periods) || [];
+        content.className = "";
+        if (!periods.length) {
+          content.innerHTML = `<div class="empty">Пока нет периодов</div>`;
+          return;
+        }
+        content.innerHTML = periods.map(renderPeriod).join("");
+      } catch (err) {
+        content.className = "";
+        content.innerHTML = `<div class="empty">Не удалось загрузить данные</div>`;
+      }
     }
 
     async function renderApp() {
-      app.innerHTML = "Загрузка…";
+      app.innerHTML = `<div class="loading">Загрузка…</div>`;
       try {
         const { ok, data } = await api("/api/me");
         if (ok && data && data.authenticated) {
-          renderLoggedIn();
+          renderBudget();
         } else {
           renderLogin();
         }
       } catch (err) {
-        app.innerHTML = "Не удалось связаться с сервером";
+        app.innerHTML = `<div class="empty">Не удалось связаться с сервером</div>`;
       }
     }
 
