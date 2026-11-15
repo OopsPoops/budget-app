@@ -12,6 +12,19 @@ from flask import jsonify, request, session
 from werkzeug.exceptions import HTTPException
 from google_sheets import create_sheets_client, GoogleSheetsStore
 
+# ======================= Flask и ошибки =======================
+
+app = Flask(__name__)
+
+
+class BudgetError(ValueError):
+    """Ошибка данных бюджета: текст показывается пользователю."""
+
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
+
+
 # ======================= Веб API и авторизация =======================
 
 app.config.update(
@@ -242,8 +255,6 @@ def handle_error(error):
     return _json_error("Внутренняя ошибка сервера", 500)
 
 
-app = Flask(__name__)
-
 BUDGET_SHEET = "cost"
 BUDGET_HEADER = [
     "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg", "extra_income"
@@ -269,14 +280,6 @@ BUDGET_MUTATIONS = frozenset({
     "budget_reorder",
 })
 BUDGET_ACTIONS = BUDGET_MUTATIONS | {"budget_periods", "budget_period"}
-
-
-class BudgetError(ValueError):
-    """Ошибка данных бюджета: текст показывается пользователю."""
-
-    def __init__(self, message, status=400):
-        super().__init__(message)
-        self.status = status
 
 
 # ======================= Проверка входных данных =======================
@@ -778,7 +781,7 @@ class BudgetStore:
         return sheet_id, rows, len(values)
 
     def _insert_rows(self, sheet_id, at, row_count, value_rows, inherit_before):
-        """Вставляет строки с индекса at (с нуля). Формат берётся у строки выше
+        """Вставляет строки с индексом at (с нуля). Формат берётся у строки выше
         (inherit_before=True) или у той, что окажется под вставкой (False).
         Если под местом вставки данных нет — дописывает в конец. Дата пишется числом,
         её вид задаёт формат ячейки."""
