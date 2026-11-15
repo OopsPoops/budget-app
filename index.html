@@ -4,9 +4,155 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Бюджет</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f5f7;
+      color: #222;
+      padding: 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 28px 24px;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    }
+    h1 { margin: 0 0 20px; font-size: 22px; text-align: center; }
+    label {
+      display: block;
+      margin-bottom: 14px;
+      font-size: 14px;
+      color: #555;
+    }
+    input {
+      display: block;
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px 12px;
+      font-size: 16px;
+      border: 1px solid #ccd0d5;
+      border-radius: 8px;
+      outline: none;
+    }
+    input:focus { border-color: #4a80f5; }
+    button {
+      width: 100%;
+      padding: 11px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      background: #4a80f5;
+      color: #fff;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .error {
+      margin: 12px 0 0;
+      font-size: 14px;
+      color: #c0392b;
+      min-height: 1.2em;
+    }
+    .muted { color: #777; font-size: 14px; text-align: center; }
+  </style>
 </head>
 <body>
-  <h1>Мой бюджет 💰</h1>
-  <p>Приложение успешно запущено!</p>
+  <main id="app" class="card">Загрузка…</main>
+
+  <script>
+    const API = "https://budget-app-x2s2.onrender.com";
+
+    async function api(path, options = {}) {
+      const opts = {
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      };
+      const res = await fetch(API + path, opts);
+      let data = null;
+      try { data = await res.json(); } catch (e) {}
+      return { status: res.status, ok: res.ok, data };
+    }
+
+    const app = document.getElementById("app");
+
+    function renderLogin(message) {
+      app.innerHTML = `
+        <h1>Бюджет</h1>
+        <form id="login-form">
+          <label>Логин
+            <input id="login-user" type="text" autocomplete="username" required>
+          </label>
+          <label>Пароль
+            <input id="login-pass" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit">Войти</button>
+          <p id="login-error" class="error">${message || ""}</p>
+        </form>
+      `;
+      const form = document.getElementById("login-form");
+      const errP = document.getElementById("login-error");
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        errP.textContent = "";
+        const btn = form.querySelector("button");
+        btn.disabled = true;
+        try {
+          const { status, ok, data } = await api("/api/login", {
+            method: "POST",
+            body: JSON.stringify({
+              username: document.getElementById("login-user").value,
+              password: document.getElementById("login-pass").value,
+            }),
+          });
+          if (ok && data && data.ok) {
+            renderLoggedIn();
+          } else {
+            errP.textContent = (data && data.error) || ("Ошибка " + status);
+          }
+        } catch (err) {
+          errP.textContent = "Сеть недоступна";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+
+    function renderLoggedIn() {
+      app.innerHTML = `
+        <h1>Бюджет</h1>
+        <p class="muted">Вы вошли в приложение.</p>
+        <button id="logout">Выйти</button>
+      `;
+      document.getElementById("logout").addEventListener("click", async () => {
+        try { await api("/api/logout", { method: "POST" }); } catch (e) {}
+        renderApp();
+      });
+    }
+
+    async function renderApp() {
+      app.innerHTML = "Загрузка…";
+      try {
+        const { ok, data } = await api("/api/me");
+        if (ok && data && data.authenticated) {
+          renderLoggedIn();
+        } else {
+          renderLogin();
+        }
+      } catch (err) {
+        app.innerHTML = "Не удалось связаться с сервером";
+      }
+    }
+
+    renderApp();
+  </script>
 </body>
 </html>
