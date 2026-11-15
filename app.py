@@ -5,6 +5,243 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from google_sheets import _as_date
 from flask import Flask
 
+import os
+import hmac
+from functools import wraps
+from flask import jsonify, request, session
+from werkzeug.exceptions import HTTPException
+from google_sheets import create_sheets_client, GoogleSheetsStore
+
+# ======================= Веб API и авторизация =======================
+
+app.config.update(
+    SECRET_KEY=os.getenv("BUDGET_SECRET_KEY") or os.getenv("GOOGLE_SVC_TOKEN", ""),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="None",
+    PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30
+)
+
+FRONTEND_ORIGIN = "https://oopspoops.github.io"
+_budget_store = None
+
+
+def _json_error(message, status):
+    return jsonify({"ok": False, "error": str(message)}), status
+
+
+def _request_data():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise BudgetError("Некорректный запрос")
+    return data
+
+
+def _get_budget_store():
+    global _budget_store
+    if _budget_store is None:
+        client = create_sheets_client(
+            service_email=os.getenv("GOOGLE_SVC_EMAIL", ""),
+            private_key=os.getenv("GOOGLE_SVC_TOKEN", "")
+        )
+        store = GoogleSheetsStore(
+            client,
+            os.getenv("GOOGLE_SHEET_ID", "")
+        )
+        _budget_store = BudgetStore(store)
+    return _budget_store
+
+
+def _login_required(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        if not session.get("budget_logged_in"):
+            return _json_error("Требуется вход", 401)
+        return func(*args, **kwargs)
+    return wrapped
+
+
+def _authorized_users():
+    return [
+        (os.getenv(f"BUDGET_USER_{i}", ""), os.getenv(f"BUDGET_PASS_{i}", ""))
+        for i in (1, 2)
+    ]
+
+
+@app.before_request
+def check_origin():
+    if request.method == "OPTIONS":
+        return "", 204
+    origin = request.headers.get("Origin")
+    if request.method == "POST" and origin and origin.rstrip("/") != FRONTEND_ORIGIN:
+        return _json_error("Запрос запрещён", 403)
+
+
+@app.after_request
+def add_cors(response):
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") == FRONTEND_ORIGIN:
+        response.headers["Access-Control-Allow-Origin"] = FRONTEND_ORIGIN
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Budget App is running!"
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"ok": True})
+
+
+@app.route("/api/login", methods=["POST", "OPTIONS"])
+def login():
+    data = _request_data()
+    username = data.get("username")
+    password = data.get("password")
+
+    users = _authorized_users()
+    if not all(users):
+        return _json_error("Авторизация не настроена", 503)
+
+    valid = False
+    if isinstance(username, str) and isinstance(password, str):
+        for saved_user, saved_pass in users:
+            if (
+                hmac.compare_digest(username, saved_user)
+                and hmac.compare_digest(password, saved_pass)
+            ):
+                valid = True
+
+    if not valid:
+        return _json_error("Неверный логин или пароль", 401)
+
+    session.clear()
+    session["budget_logged_in"] = True
+    session.permanent = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/me", methods=["GET", "OPTIONS"])
+def me():
+    return jsonify({
+        "ok": True,
+        "authenticated": bool(session.get("budget_logged_in"))
+    })
+
+
+@app.route("/api/logout", methods=["POST", "OPTIONS"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/budget/periods", methods=["GET", "OPTIONS"])
+@_login_required
+def budget_periods():
+    return jsonify({
+        "ok": True,
+        "data": build_state(_get_budget_store().read_rows())
+    })
+
+
+@app.route("/api/budget/period/<pay_date>", methods=["GET", "OPTIONS"])
+@_login_required
+def budget_period(pay_date):
+    parsed = parse_iso_date(pay_date)
+    state = build_state(_get_budget_store().read_rows())
+    return jsonify({"ok": True, "data": find_period(state, parsed)})
+
+
+@app.route("/api/budget/month/add", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_month_add():
+    expected, salaries = parse_month_request(_request_data())
+    result = _get_budget_store().add_month(expected, salaries)
+    return jsonify({"ok": True, "data": result})
+
+
+@app.route("/api/budget/item/add", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_add():
+    data = _request_data()
+    result = _get_budget_store().add_item(
+        parse_iso_date(data.get("pay_date")),
+        parse_name(data.get("name")),
+        parse_amount(data.get("amount")),
+        parse_permanent(data.get("permanent"))
+    )
+    return jsonify({"ok": True, "data": {"pay_date": result}})
+
+
+@app.route("/api/budget/item/update", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_update():
+    data = _request_data()
+    result = _get_budget_store().update_item(
+        parse_item_id(data.get("id")),
+        parse_name(data.get("name")),
+        parse_amount(data.get("amount")),
+        parse_permanent(data.get("permanent"))
+    )
+    return jsonify({"ok": True, "data": {"pay_date": result}})
+
+
+@app.route("/api/budget/item/delete", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_delete():
+    result = _get_budget_store().delete_item(
+        parse_item_id(_request_data().get("id"))
+    )
+    return jsonify({"ok": True, "data": {"pay_date": result}})
+
+
+@app.route("/api/budget/salary/set", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_salary_set():
+    data = _request_data()
+    salary = parse_amount(data["salary"]) if data.get("salary") is not None else None
+    extra = parse_amount(data["extra"]) if data.get("extra") is not None else None
+    scope = parse_scope(data.get("scope")) if salary is not None else None
+
+    result = _get_budget_store().set_income(
+        parse_iso_date(data.get("pay_date")),
+        salary,
+        scope,
+        extra
+    )
+    return jsonify({"ok": True, "data": {"pay_date": result}})
+
+
+@app.route("/api/budget/reorder", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_reorder():
+    data = _request_data()
+    result = _get_budget_store().reorder(
+        parse_iso_date(data.get("pay_date")),
+        parse_ids(data.get("ids"))
+    )
+    return jsonify({"ok": True, "data": {"pay_date": result}})
+
+
+@app.errorhandler(BudgetError)
+def handle_budget_error(error):
+    return _json_error(error, error.status)
+
+
+@app.errorhandler(Exception)
+def handle_error(error):
+    if isinstance(error, HTTPException):
+        return _json_error(error.description, error.code or 500)
+    app.logger.exception("Budget API error")
+    return _json_error("Внутренняя ошибка сервера", 500)
+
+
 app = Flask(__name__)
 
 BUDGET_SHEET = "cost"
