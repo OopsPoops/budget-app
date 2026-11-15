@@ -119,15 +119,17 @@ def login():
     password = data.get("password")
 
     users = _authorized_users()
-    if not all(users):
+    if not all(u and p for u, p in users):
         return _json_error("Авторизация не настроена", 503)
 
     valid = False
     if isinstance(username, str) and isinstance(password, str):
+        username_bytes = username.encode("utf-8")
+        password_bytes = password.encode("utf-8")
         for saved_user, saved_pass in users:
             if (
-                hmac.compare_digest(username, saved_user)
-                and hmac.compare_digest(password, saved_pass)
+                hmac.compare_digest(username_bytes, saved_user.encode("utf-8"))
+                and hmac.compare_digest(password_bytes, saved_pass.encode("utf-8"))
             ):
                 valid = True
 
