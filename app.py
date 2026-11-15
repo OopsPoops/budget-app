@@ -10,8 +10,8 @@ import hmac
 from functools import wraps
 from flask import jsonify, request, session
 from werkzeug.exceptions import HTTPException
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from google_sheets import create_sheets_client, GoogleSheetsStore
-
 # ======================= Flask и ошибки =======================
 
 app = Flask(__name__)
@@ -65,10 +65,43 @@ def _get_budget_store():
     return _budget_store
 
 
+TOKEN_MAX_AGE = 60 * 60 * 24 * 30
+TOKEN_SALT = "budget-session"
+
+
+def _serializer():
+    return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt=TOKEN_SALT)
+
+
+def _make_token(user_index):
+    return _serializer().dumps({"u": user_index})
+
+
+def _verify_token(token):
+    try:
+        data = _serializer().loads(token, max_age=TOKEN_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    if isinstance(data, dict) and data.get("u") in (1, 2):
+        return data["u"]
+    return None
+
+
+def _current_user():
+    """True, если пользователь авторизован (кука для ПК или Bearer-токен для iOS)."""
+    if session.get("budget_logged_in"):
+        return True
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        if _verify_token(auth[7:].strip()):
+            return True
+    return False
+
+
 def _login_required(func):
     @wraps(func)
     def wrapped(*args, **kwargs):
-        if not session.get("budget_logged_in"):
+        if not _current_user():
             return _json_error("Требуется вход", 401)
         return func(*args, **kwargs)
     return wrapped
@@ -96,7 +129,7 @@ def add_cors(response):
     if origin and origin.rstrip("/") == FRONTEND_ORIGIN:
         response.headers["Access-Control-Allow-Origin"] = FRONTEND_ORIGIN
         response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Vary"] = "Origin"
     return response
@@ -122,32 +155,30 @@ def login():
     if not all(u and p for u, p in users):
         return _json_error("Авторизация не настроена", 503)
 
-    valid = False
+    user_index = None
     if isinstance(username, str) and isinstance(password, str):
         username_bytes = username.encode("utf-8")
         password_bytes = password.encode("utf-8")
-        for saved_user, saved_pass in users:
+        for i, (saved_user, saved_pass) in enumerate(users, start=1):
             if (
                 hmac.compare_digest(username_bytes, saved_user.encode("utf-8"))
                 and hmac.compare_digest(password_bytes, saved_pass.encode("utf-8"))
             ):
-                valid = True
+                user_index = i
+                break
 
-    if not valid:
+    if user_index is None:
         return _json_error("Неверный логин или пароль", 401)
 
     session.clear()
     session["budget_logged_in"] = True
     session.permanent = True
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "token": _make_token(user_index)})
 
 
 @app.route("/api/me", methods=["GET", "OPTIONS"])
 def me():
-    return jsonify({
-        "ok": True,
-        "authenticated": bool(session.get("budget_logged_in"))
-    })
+    return jsonify({"ok": True, "authenticated": _current_user()})
 
 
 @app.route("/api/logout", methods=["POST", "OPTIONS"])
