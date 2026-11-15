@@ -115,12 +115,26 @@
   <script>
     const API = "https://budget-app-x2s2.onrender.com";
 
+    const TOKEN_KEY = "budget_token";
+
+    function getToken() { return localStorage.getItem(TOKEN_KEY); }
+    function setToken(t) {
+      if (t) localStorage.setItem(TOKEN_KEY, t);
+      else localStorage.removeItem(TOKEN_KEY);
+    }
+
     async function api(path, options = {}) {
+      const headers = { "Content-Type": "application/json" };
+      const token = getToken();
+      if (token) headers["Authorization"] = "Bearer " + token;
       const opts = {
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers,
         ...options,
       };
+      if (options.headers) {
+        opts.headers = { ...headers, ...options.headers };
+      }
       const res = await fetch(API + path, opts);
       let data = null;
       try { data = await res.json(); } catch (e) {}
@@ -172,6 +186,7 @@
             }),
           });
           if (ok && data && data.ok) {
+            setToken(data.token);
             renderBudget();
           } else {
             errP.textContent = (data && data.error) || ("Ошибка " + status);
@@ -226,6 +241,7 @@
       `;
       document.getElementById("logout").addEventListener("click", async () => {
         try { await api("/api/logout", { method: "POST" }); } catch (e) {}
+        setToken(null);
         renderApp();
       });
       loadPeriods();
