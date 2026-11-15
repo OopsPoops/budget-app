@@ -3,6 +3,9 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from google_sheets import _as_date
+from flask import Flask
+
+app = Flask(__name__)
 
 BUDGET_SHEET = "cost"
 BUDGET_HEADER = [
