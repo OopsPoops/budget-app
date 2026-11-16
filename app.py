@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 import os
 import re
@@ -8,14 +9,31 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 
 from flask import Flask, jsonify, request, session
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from itsdangerous import BadData, URLSafeTimedSerializer
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash
 
 from google_sheets import GoogleSheetsError, GoogleSheetsStore, _as_date, create_sheets_client
 
 # ======================= Flask и ошибки =======================
 
 app = Flask(__name__)
+
+
+def _proxy_hops():
+    try:
+        return max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "1")))
+    except ValueError:
+        return 1
+
+
+# Render стоит перед приложением как прокси: настоящий IP клиента приходит в X-Forwarded-For.
+# Он нужен для ограничения попыток входа. Доверяем только последнему прокси, поэтому заголовок,
+# подставленный самим клиентом, не сработает. Если перед Render появится ещё один прокси или CDN,
+# задай TRUSTED_PROXY_HOPS=2.
+if _proxy_hops():
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_proxy_hops())
 
 
 class BudgetError(ValueError):
@@ -28,15 +46,32 @@ class BudgetError(ValueError):
 
 # ======================= Веб API и авторизация =======================
 
+SESSION_DAYS = 7                      # столько дней живут сессия и токен, потом нужно войти заново
+SESSION_SECONDS = 60 * 60 * 24 * SESSION_DAYS
+SECRET_KEY_MIN_LENGTH = 32
+
+# Ключ подписи сессий и токенов — только отдельный BUDGET_SECRET_KEY. Приватный ключ Google для этого
+# больше не используется. Нет ключа или он короткий — вход закрыт целиком (как и при ненастроенных
+# логинах), а не открыт со слабой подписью.
+_secret_key = os.getenv("BUDGET_SECRET_KEY", "")
+SECRET_READY = len(_secret_key) >= SECRET_KEY_MIN_LENGTH
+if not SECRET_READY:
+    app.logger.error(
+        "BUDGET_SECRET_KEY не задан или короче %d символов: вход отключён.", SECRET_KEY_MIN_LENGTH
+    )
+
 app.config.update(
-    SECRET_KEY=os.getenv("BUDGET_SECRET_KEY") or os.getenv("GOOGLE_SVC_TOKEN", ""),
+    SECRET_KEY=_secret_key if SECRET_READY else None,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_SAMESITE="None",
-    PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30
+    PERMANENT_SESSION_LIFETIME=SESSION_SECONDS,
+    MAX_CONTENT_LENGTH=32 * 1024          # тело запроса не больше 32 КБ
 )
 
-FRONTEND_ORIGIN = "https://oopspoops.github.io"
+# Адрес сайта, которому разрешено обращаться к API. Если фронтенд переедет на свой адрес,
+# достаточно поменять переменную FRONTEND_ORIGIN, код трогать не нужно.
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "https://oopspoops.github.io").strip().rstrip("/")
 
 
 def _json_error(message, status):
@@ -50,7 +85,7 @@ def _request_data():
     return data
 
 
-TOKEN_MAX_AGE = 60 * 60 * 24 * 30
+TOKEN_MAX_AGE = SESSION_SECONDS
 TOKEN_SALT = "budget-session"
 
 
@@ -58,23 +93,49 @@ def _serializer():
     return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt=TOKEN_SALT)
 
 
+def _fingerprint(index):
+    """Отпечаток логина и пароля пользователя. Он записывается в токен и в сессию и совпадает, пока
+    логин и пароль в настройках не менялись. Сменил пароль (или ключ) — все выданные раньше токены
+    и сессии сразу перестают работать, то есть это «выйти на всех устройствах»."""
+    user = os.getenv(f"BUDGET_USER_{index}", "")
+    password = os.getenv(f"BUDGET_PASS_{index}", "")
+    if not SECRET_READY or not user or not password:
+        return None
+    message = f"{index}\0{user}\0{password}".encode("utf-8")
+    key = app.config["SECRET_KEY"].encode("utf-8")
+    return hmac.new(key, message, hashlib.sha256).hexdigest()[:32]
+
+
+def _valid_identity(index, fingerprint):
+    if isinstance(index, bool) or index not in (1, 2) or not isinstance(fingerprint, str):
+        return False
+    expected = _fingerprint(index)
+    if expected is None:
+        return False
+    return hmac.compare_digest(fingerprint.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _make_token(user_index):
-    return _serializer().dumps({"u": user_index})
+    return _serializer().dumps({"u": user_index, "f": _fingerprint(user_index)})
 
 
 def _verify_token(token):
+    if not SECRET_READY:
+        return None
     try:
         data = _serializer().loads(token, max_age=TOKEN_MAX_AGE)
-    except (BadSignature, SignatureExpired):
+    except BadData:
         return None
-    if isinstance(data, dict) and data.get("u") in (1, 2):
+    if isinstance(data, dict) and _valid_identity(data.get("u"), data.get("f")):
         return data["u"]
     return None
 
 
 def _current_user():
     """True, если пользователь авторизован (кука для ПК или Bearer-токен для iOS)."""
-    if session.get("budget_logged_in"):
+    if not SECRET_READY:
+        return False
+    if _valid_identity(session.get("u"), session.get("f")):
         return True
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
@@ -99,13 +160,71 @@ def _authorized_users():
     ]
 
 
+def _password_matches(saved, supplied):
+    """Пароль в настройках — либо хэш (scrypt:/pbkdf2:, как его получить — в README),
+    либо обычный текст, как было раньше."""
+    if saved.startswith(("scrypt:", "pbkdf2:")):
+        try:
+            return check_password_hash(saved, supplied)
+        except ValueError:
+            return False
+    return hmac.compare_digest(supplied.encode("utf-8"), saved.encode("utf-8"))
+
+
+# ---- защита входа от подбора пароля ----
+# Неудачные попытки считаются в памяти процесса. Если у gunicorn несколько воркеров,
+# у каждого свой счётчик, и предел умножается на их число.
+LOGIN_WINDOW = 15 * 60       # окно подсчёта, секунд
+LOGIN_MAX_PER_IP = 5         # неудачных попыток с одного IP за окно
+LOGIN_MAX_TOTAL = 20         # неудачных попыток всего за окно (перебор с разных адресов)
+_login_failures = {}
+_login_lock = threading.Lock()
+
+
+def _fresh(stamps, now):
+    return [stamp for stamp in stamps if now - stamp < LOGIN_WINDOW]
+
+
+def _login_wait(ip):
+    """Сколько секунд ждать до следующей попытки входа (0 — можно пробовать)."""
+    now = time.time()
+    wait = 0
+    with _login_lock:
+        for key, limit in ((("ip", ip), LOGIN_MAX_PER_IP), (("all",), LOGIN_MAX_TOTAL)):
+            stamps = _fresh(_login_failures.get(key, []), now)
+            if stamps:
+                _login_failures[key] = stamps
+            else:
+                _login_failures.pop(key, None)
+            if len(stamps) >= limit:
+                wait = max(wait, int(LOGIN_WINDOW - (now - stamps[0])) + 1)
+    return wait
+
+
+def _login_failed(ip):
+    now = time.time()
+    with _login_lock:
+        for key in (("ip", ip), ("all",)):
+            _login_failures[key] = _fresh(_login_failures.get(key, []), now) + [now]
+
+
+def _login_succeeded(ip):
+    with _login_lock:
+        _login_failures.pop(("ip", ip), None)
+
+
 @app.before_request
 def check_origin():
     if request.method == "OPTIONS":
         return "", 204
-    origin = request.headers.get("Origin")
-    if request.method == "POST" and origin and origin.rstrip("/") != FRONTEND_ORIGIN:
-        return _json_error("Запрос запрещён", 403)
+    if request.method == "POST":
+        origin = request.headers.get("Origin")
+        if origin:
+            if origin.rstrip("/") != FRONTEND_ORIGIN:
+                return _json_error("Запрос запрещён", 403)
+        elif not request.headers.get("Authorization", "").startswith("Bearer "):
+            # Браузер всегда присылает Origin. Нет ни Origin, ни токена — запрос не из нашего приложения.
+            return _json_error("Запрос запрещён", 403)
 
 
 @app.after_request
@@ -116,9 +235,15 @@ def add_cors(response):
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Vary"] = "Origin"
+    response.vary.add("Origin")
     if request.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    # API отдаёт только JSON: запрещаем встраивание в чужие страницы и угадывание типа содержимого.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 
@@ -139,26 +264,40 @@ def login():
     password = data.get("password")
 
     users = _authorized_users()
-    if not all(u and p for u, p in users):
+    if not SECRET_READY or not all(u and p for u, p in users):
         return _json_error("Авторизация не настроена", 503)
 
+    ip = request.remote_addr or "?"
+    wait = _login_wait(ip)
+    if wait:
+        minutes = max(1, -(-wait // 60))
+        response, status = _json_error(
+            f"Слишком много неудачных попыток. Подожди {minutes} мин. и попробуй снова.", 429
+        )
+        response.headers["Retry-After"] = str(wait)
+        return response, status
+
     user_index = None
-    if isinstance(username, str) and isinstance(password, str):
+    if (
+        isinstance(username, str) and isinstance(password, str)
+        and len(username) <= 256 and len(password) <= 256
+    ):
         username_bytes = username.encode("utf-8")
-        password_bytes = password.encode("utf-8")
+        # Проверяем обоих пользователей без раннего выхода: по времени ответа нельзя угадать верный логин.
         for i, (saved_user, saved_pass) in enumerate(users, start=1):
-            if (
-                hmac.compare_digest(username_bytes, saved_user.encode("utf-8"))
-                and hmac.compare_digest(password_bytes, saved_pass.encode("utf-8"))
-            ):
+            user_ok = hmac.compare_digest(username_bytes, saved_user.encode("utf-8"))
+            pass_ok = _password_matches(saved_pass, password)
+            if user_ok and pass_ok and user_index is None:
                 user_index = i
-                break
 
     if user_index is None:
+        _login_failed(ip)
         return _json_error("Неверный логин или пароль", 401)
 
+    _login_succeeded(ip)
     session.clear()
-    session["budget_logged_in"] = True
+    session["u"] = user_index
+    session["f"] = _fingerprint(user_index)
     session.permanent = True
     return jsonify({"ok": True, "token": _make_token(user_index)})
 
@@ -170,7 +309,8 @@ def me():
 
 @app.route("/api/logout", methods=["POST", "OPTIONS"])
 def logout():
-    session.clear()
+    if SECRET_READY:
+        session.clear()
     return jsonify({"ok": True})
 
 
@@ -878,14 +1018,14 @@ def _get_budget_store():
     global _budget_store
     with _store_lock:
         if _budget_store is None:
+            sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+            if not sheet_id:
+                raise GoogleSheetsError("Не задан GOOGLE_SHEET_ID.")
             client = create_sheets_client(
                 service_email=os.getenv("GOOGLE_SVC_EMAIL", ""),
                 private_key=os.getenv("GOOGLE_SVC_TOKEN", "")
             )
-            store = GoogleSheetsStore(
-                client,
-                os.getenv("GOOGLE_SHEET_ID", "")
-            )
+            store = GoogleSheetsStore(client, sheet_id)
             _budget_store = BudgetStore(store)
         return _budget_store
 
@@ -1036,8 +1176,9 @@ def handle_budget_error(error):
 
 @app.errorhandler(GoogleSheetsError)
 def handle_sheets_error(error):
+    # Подробности (имена переменных, листов, подсказки по ключу) только в лог, клиенту — общий текст.
     app.logger.warning("Ошибка Google Sheets: %s", error)
-    return _json_error(error, 502)
+    return _json_error("Не удалось обратиться к таблице. Попробуй ещё раз позже.", 502)
 
 
 @app.errorhandler(Exception)
