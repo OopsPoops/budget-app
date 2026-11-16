@@ -1,17 +1,18 @@
+import hmac
+import os
 import re
+import threading
+import time
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
-from google_sheets import _as_date
-from flask import Flask
-
-import os
-import hmac
 from functools import wraps
-from flask import jsonify, request, session
+
+from flask import Flask, jsonify, request, session
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.exceptions import HTTPException
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from google_sheets import create_sheets_client, GoogleSheetsStore
+
+from google_sheets import GoogleSheetsError, GoogleSheetsStore, _as_date, create_sheets_client
+
 # ======================= Flask и ошибки =======================
 
 app = Flask(__name__)
@@ -36,7 +37,6 @@ app.config.update(
 )
 
 FRONTEND_ORIGIN = "https://oopspoops.github.io"
-_budget_store = None
 
 
 def _json_error(message, status):
@@ -48,21 +48,6 @@ def _request_data():
     if not isinstance(data, dict):
         raise BudgetError("Некорректный запрос")
     return data
-
-
-def _get_budget_store():
-    global _budget_store
-    if _budget_store is None:
-        client = create_sheets_client(
-            service_email=os.getenv("GOOGLE_SVC_EMAIL", ""),
-            private_key=os.getenv("GOOGLE_SVC_TOKEN", "")
-        )
-        store = GoogleSheetsStore(
-            client,
-            os.getenv("GOOGLE_SHEET_ID", "")
-        )
-        _budget_store = BudgetStore(store)
-    return _budget_store
 
 
 TOKEN_MAX_AGE = 60 * 60 * 24 * 30
@@ -132,6 +117,8 @@ def add_cors(response):
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Vary"] = "Origin"
+    if request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -187,107 +174,6 @@ def logout():
     return jsonify({"ok": True})
 
 
-@app.route("/api/budget/periods", methods=["GET", "OPTIONS"])
-@_login_required
-def budget_periods():
-    return jsonify({
-        "ok": True,
-        "data": build_state(_get_budget_store().read_rows())
-    })
-
-
-@app.route("/api/budget/period/<pay_date>", methods=["GET", "OPTIONS"])
-@_login_required
-def budget_period(pay_date):
-    parsed = parse_iso_date(pay_date)
-    state = build_state(_get_budget_store().read_rows())
-    return jsonify({"ok": True, "data": find_period(state, parsed)})
-
-
-@app.route("/api/budget/month/add", methods=["POST", "OPTIONS"])
-@_login_required
-def budget_month_add():
-    expected, salaries = parse_month_request(_request_data())
-    result = _get_budget_store().add_month(expected, salaries)
-    return jsonify({"ok": True, "data": result})
-
-
-@app.route("/api/budget/item/add", methods=["POST", "OPTIONS"])
-@_login_required
-def budget_item_add():
-    data = _request_data()
-    result = _get_budget_store().add_item(
-        parse_iso_date(data.get("pay_date")),
-        parse_name(data.get("name")),
-        parse_amount(data.get("amount")),
-        parse_permanent(data.get("permanent"))
-    )
-    return jsonify({"ok": True, "data": {"pay_date": result}})
-
-
-@app.route("/api/budget/item/update", methods=["POST", "OPTIONS"])
-@_login_required
-def budget_item_update():
-    data = _request_data()
-    result = _get_budget_store().update_item(
-        parse_item_id(data.get("id")),
-        parse_name(data.get("name")),
-        parse_amount(data.get("amount")),
-        parse_permanent(data.get("permanent"))
-    )
-    return jsonify({"ok": True, "data": {"pay_date": result}})
-
-
-@app.route("/api/budget/item/delete", methods=["POST", "OPTIONS"])
-@_login_required
-def budget_item_delete():
-    result = _get_budget_store().delete_item(
-        parse_item_id(_request_data().get("id"))
-    )
-    return jsonify({"ok": True, "data": {"pay_date": result}})
-
-
-@app.route("/api/budget/salary/set", methods=["POST", "OPTIONS"])
-@_login_required
-def budget_salary_set():
-    data = _request_data()
-    salary = parse_amount(data["salary"]) if data.get("salary") is not None else None
-    extra = parse_amount(data["extra"]) if data.get("extra") is not None else None
-    scope = parse_scope(data.get("scope")) if salary is not None else None
-
-    result = _get_budget_store().set_income(
-        parse_iso_date(data.get("pay_date")),
-        salary,
-        scope,
-        extra
-    )
-    return jsonify({"ok": True, "data": {"pay_date": result}})
-
-
-@app.route("/api/budget/reorder", methods=["POST", "OPTIONS"])
-@_login_required
-def budget_reorder():
-    data = _request_data()
-    result = _get_budget_store().reorder(
-        parse_iso_date(data.get("pay_date")),
-        parse_ids(data.get("ids"))
-    )
-    return jsonify({"ok": True, "data": {"pay_date": result}})
-
-
-@app.errorhandler(BudgetError)
-def handle_budget_error(error):
-    return _json_error(error, error.status)
-
-
-@app.errorhandler(Exception)
-def handle_error(error):
-    if isinstance(error, HTTPException):
-        return _json_error(error.description, error.code or 500)
-    app.logger.exception("Budget API error")
-    return _json_error("Внутренняя ошибка сервера", 500)
-
-
 BUDGET_SHEET = "cost"
 BUDGET_HEADER = [
     "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg", "extra_income"
@@ -303,16 +189,6 @@ AMOUNT_MAX = 1_000_000_000
 IDS_MAX = 300
 MAX_MONTHS_AHEAD = 24       # за один раз можно добавить не больше стольких месяцев вперёд
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-
-BUDGET_MUTATIONS = frozenset({
-    "budget_month_add",
-    "budget_item_add",
-    "budget_item_update",
-    "budget_item_delete",
-    "budget_salary_set",
-    "budget_reorder",
-})
-BUDGET_ACTIONS = BUDGET_MUTATIONS | {"budget_periods", "budget_period"}
 
 
 # ======================= Проверка входных данных =======================
@@ -695,9 +571,9 @@ def _next_id(rows):
 
 
 class BudgetStore:
-    """Чтение и запись листа `cost`. Методы синхронные: bot.py вызывает их через
-    _call_google_sheets, то есть под общей блокировкой — чтение и запись внутри
-    одного метода не перебиваются другим запросом."""
+    """Чтение и запись листа `cost`. Методы синхронные; веб-запросы вызывают их под общей
+    блокировкой (_store_call), поэтому чтение и запись внутри одного метода не перебиваются
+    другим запросом."""
 
     def __init__(self, store):
         self.store = store
@@ -989,3 +865,184 @@ class BudgetStore:
             for slot, item_id in zip(items, ids)
         ])
         return pay_date.isoformat()
+
+
+# ======================= API бюджета =======================
+REQUEST_TTL = 600           # столько секунд помним request_id, чтобы не выполнить запрос дважды
+_budget_store = None
+_store_lock = threading.RLock()
+_requests = {}
+
+
+def _get_budget_store():
+    global _budget_store
+    with _store_lock:
+        if _budget_store is None:
+            client = create_sheets_client(
+                service_email=os.getenv("GOOGLE_SVC_EMAIL", ""),
+                private_key=os.getenv("GOOGLE_SVC_TOKEN", "")
+            )
+            store = GoogleSheetsStore(
+                client,
+                os.getenv("GOOGLE_SHEET_ID", "")
+            )
+            _budget_store = BudgetStore(store)
+        return _budget_store
+
+
+def _store_call(method_name, *args):
+    """Все обращения к таблице идут по одному: клиент Google не рассчитан на параллельные
+    вызовы, а чтение и запись внутри метода не должны перебиваться другим запросом."""
+    with _store_lock:
+        return getattr(_get_budget_store(), method_name)(*args)
+
+
+def _claim_request(request_id):
+    """True — запрос новый и его можно выполнять; False — такой request_id уже был."""
+    now = time.time()
+    with _store_lock:
+        for key, stamp in list(_requests.items()):
+            if now - stamp > REQUEST_TTL:
+                del _requests[key]
+        if not request_id:
+            return True
+        if request_id in _requests:
+            return False
+        _requests[request_id] = now
+        return True
+
+
+def _release_request(request_id):
+    if request_id:
+        with _store_lock:
+            _requests.pop(request_id, None)
+
+
+def _state_response(extra=None):
+    data = build_state(_store_call("read_rows"))
+    if extra:
+        data.update(extra)
+    return jsonify({"ok": True, "data": data})
+
+
+def _budget_mutation(apply):
+    """Выполняет одно изменение и отдаёт обновлённое состояние. Повтор того же request_id
+    (двойное нажатие, повторная отправка) ничего не меняет и возвращает свежие данные."""
+    data = _request_data()
+    request_id = parse_request_id(data.get("request_id"))
+    if not _claim_request(request_id):
+        return _state_response({"duplicate": True})
+    try:
+        focus = apply(data)
+    except Exception:
+        _release_request(request_id)
+        raise
+    return _state_response({"focus": focus})
+
+
+@app.route("/api/budget/periods", methods=["GET", "OPTIONS"])
+@_login_required
+def budget_periods():
+    return _state_response()
+
+
+@app.route("/api/budget/period/<pay_date>", methods=["GET", "OPTIONS"])
+@_login_required
+def budget_period(pay_date):
+    parsed = parse_iso_date(pay_date, "Дата зарплаты")
+    state = build_state(_store_call("read_rows"))
+    return jsonify({"ok": True, "data": find_period(state, parsed)})
+
+
+@app.route("/api/budget/month/add", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_month_add():
+    def apply(data):
+        expected, salaries = parse_month_request(data)
+        return _store_call("add_month", expected, salaries)["focus"]
+    return _budget_mutation(apply)
+
+
+@app.route("/api/budget/item/add", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_add():
+    def apply(data):
+        return _store_call(
+            "add_item",
+            parse_iso_date(data.get("pay_date"), "Дата зарплаты"),
+            parse_name(data.get("name")),
+            parse_amount(data.get("amount"), "Сумма расхода"),
+            parse_permanent(data.get("permanent"))
+        )
+    return _budget_mutation(apply)
+
+
+@app.route("/api/budget/item/update", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_update():
+    def apply(data):
+        return _store_call(
+            "update_item",
+            parse_item_id(data.get("id")),
+            parse_name(data.get("name")),
+            parse_amount(data.get("amount"), "Сумма расхода"),
+            parse_permanent(data.get("permanent"))
+        )
+    return _budget_mutation(apply)
+
+
+@app.route("/api/budget/item/delete", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_delete():
+    def apply(data):
+        return _store_call("delete_item", parse_item_id(data.get("id")))
+    return _budget_mutation(apply)
+
+
+@app.route("/api/budget/salary/set", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_salary_set():
+    def apply(data):
+        salary = data.get("salary")
+        extra = data.get("extra")
+        if salary is None and extra is None:
+            raise BudgetError("Нечего менять")
+        return _store_call(
+            "set_income",
+            parse_iso_date(data.get("pay_date"), "Дата зарплаты"),
+            None if salary is None else parse_amount(salary, "Зарплата"),
+            None if salary is None else parse_scope(data.get("scope")),
+            None if extra is None else parse_amount(extra, "Доп. заработок")
+        )
+    return _budget_mutation(apply)
+
+
+@app.route("/api/budget/reorder", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_reorder():
+    def apply(data):
+        return _store_call(
+            "reorder",
+            parse_iso_date(data.get("pay_date"), "Дата зарплаты"),
+            parse_ids(data.get("ids"))
+        )
+    return _budget_mutation(apply)
+
+
+@app.errorhandler(BudgetError)
+def handle_budget_error(error):
+    return _json_error(error, error.status)
+
+
+@app.errorhandler(GoogleSheetsError)
+def handle_sheets_error(error):
+    app.logger.warning("Ошибка Google Sheets: %s", error)
+    return _json_error(error, 502)
+
+
+@app.errorhandler(Exception)
+def handle_error(error):
+    if isinstance(error, HTTPException):
+        return _json_error(error.description, error.code or 500)
+    app.logger.exception("Budget API error")
+    return _json_error("Внутренняя ошибка сервера", 500)
