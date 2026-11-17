@@ -130,7 +130,7 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-card-head{display:flex;justify-content:space-between;align-items:baseline;padding:14px 16px 10px;font-size:16px;font-weight:800}
 .bd-card-head span{font-size:12px;font-weight:600;color:var(--muted)}
 .bd-list{position:relative}
-.bd-row{position:relative;display:flex;align-items:center;gap:6px;height:62px;padding:0 15px 0 2px;background:var(--card);border-top:1px solid var(--line);cursor:pointer;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:transform .25s cubic-bezier(.22,1,.36,1),box-shadow .2s,opacity .2s}
+.bd-row{position:relative;display:flex;align-items:center;gap:6px;height:62px;padding:0 2px 0 16px;background:var(--card);border-top:1px solid var(--line);cursor:pointer;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:transform .25s cubic-bezier(.22,1,.36,1),box-shadow .2s,opacity .2s}
 .bd-list.noanim .bd-row{transition:none}
 .bd-row:active{background:var(--input-bg)}
 .bd-row.lifted{z-index:6;border-radius:16px;border-top-color:transparent;box-shadow:0 14px 34px rgba(0,0,0,.24),0 0 0 .5px var(--card-border);transition:box-shadow .2s;cursor:grabbing;background:var(--card)}
@@ -615,9 +615,9 @@ function summaryHtml(p){
 function rowHtml(it){
  const zero=it.amount===0;
  return '<div class="bd-row'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
-  +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button>'
   +'<div class="bd-name"><b>'+esc(it.name)+'</b><small>'+(it.permanent?'Постоянная':'Разовая')+(zero?' · не учитывается':'')+(it.done?' · выполнена':'')+'</small></div>'
-  +'<div class="bd-sum">'+money(it.amount)+'</div></div>';
+  +'<div class="bd-sum">'+money(it.amount)+'</div>'
+  +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
 }
 function firstHtml(){
  return '<section class="bd-card bd-first"><div class="bd-ico">💰</div><h3>Бюджета пока нет</h3>'
