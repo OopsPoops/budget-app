@@ -138,6 +138,15 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-name{flex:1;min-width:0}
 .bd-name b{display:block;font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bd-name small{display:block;margin-top:2px;font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bd-title{display:flex;align-items:center;min-width:0}
+.bd-title>b{flex:0 1 auto;min-width:0}
+.bd-tag{flex:none;display:inline-grid;place-items:center;width:20px;height:20px;margin-right:8px;border-radius:50%;font-style:normal;font-size:10.5px;font-weight:800;line-height:1;letter-spacing:0}
+.bd-tag.perm{background:rgba(32,169,155,.15);color:var(--teal)}
+.bd-tag.once{background:rgba(82,103,232,.14);color:var(--blue)}
+@supports (color:color-mix(in srgb,red,blue)){
+.bd-tag.perm{background:color-mix(in srgb,var(--teal) 15%,transparent)}
+.bd-tag.once{background:color-mix(in srgb,var(--blue) 14%,transparent)}
+}
 .bd-sum{flex:none;max-width:44%;font-size:17px;font-weight:800;letter-spacing:-.3px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bd-row.zero .bd-name b,.bd-row.zero .bd-sum{color:var(--muted);font-weight:650}
 .bd-row.zero{opacity:.72}
@@ -614,8 +623,10 @@ function summaryHtml(p){
 }
 function rowHtml(it){
  const zero=it.amount===0;
+ const tagLabel=it.permanent?'Постоянная':'Разовая';
+ const note=[zero?'не учитывается':null,it.done?'выполнена':null].filter(Boolean).join(' · ');
  return '<div class="bd-row'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
-  +'<div class="bd-name"><b>'+esc(it.name)+'</b><small>'+(it.permanent?'Постоянная':'Разовая')+(zero?' · не учитывается':'')+(it.done?' · выполнена':'')+'</small></div>'
+  +'<div class="bd-name"><div class="bd-title"><i class="bd-tag '+(it.permanent?'perm':'once')+'" role="img" aria-label="'+tagLabel+' статья" title="'+tagLabel+' статья">'+(it.permanent?'П':'Р')+'</i><b>'+esc(it.name)+'</b></div>'+(note?'<small>'+note+'</small>':'')+'</div>'
   +'<div class="bd-sum">'+money(it.amount)+'</div>'
   +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
 }
