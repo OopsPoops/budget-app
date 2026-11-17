@@ -453,16 +453,42 @@ def pay_date_for(year, month, day):
     return result
 
 
-def month_pay_dates(year, month):
-    return [pay_date_for(year, month, day) for day in PAY_DAYS]
-
-
 def next_month(year, month):
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 
-def month_key(day):
-    return f"{day.year:04d}-{day.month:02d}"
+def _prev_month(year, month):
+    return (year - 1, 12) if month == 1 else (year, month - 1)
+
+
+def _first_slot(day):
+    """«Первая» зарплата месяца — 3-е число (на выходных может сместиться на 1–5-е),
+    «вторая» — 17-е (15–19-е)."""
+    return day.day <= 10
+
+
+def _budget_month(day):
+    """Месяц бюджета для даты зарплаты: «вторая» (17-е) относится к своему календарному
+    месяцу, «первая» (3-е) — к предыдущему. То есть ноябрь = 17.11 + 03.12."""
+    if _first_slot(day):
+        return _prev_month(day.year, day.month)
+    return day.year, day.month
+
+
+def _budget_month_key(day):
+    year, month = _budget_month(day)
+    return f"{year:04d}-{month:02d}"
+
+
+def _month_keys(dates):
+    """Ключи месяцев бюджета для дат зарплат (по возрастанию). Самая ранняя «первая»
+    зарплата без предыдущей «второй» иначе попала бы в несуществующий месяц — её
+    относим к собственному календарному, иначе в начале была бы лишняя страница."""
+    keys = [_budget_month_key(day) for day in dates]
+    if dates and _first_slot(dates[0]):
+        first = dates[0]
+        keys[0] = f"{first.year:04d}-{first.month:02d}"
+    return keys
 
 
 # ======================= Разбор листа =======================
@@ -562,7 +588,8 @@ def build_state(rows):
             groups.setdefault(row["date"], []).append(row)
 
     periods = []
-    for day in sorted(groups):
+    days = sorted(groups)
+    for day, mkey in zip(days, _month_keys(days)):
         group = groups[day]
         salary = _period_salary(group)
         extra = _period_extra(group)
@@ -580,7 +607,7 @@ def build_state(rows):
         expenses = _tidy(sum(item["amount"] for item in items))
         periods.append({
             "pay_date": day.isoformat(),
-            "month": month_key(day),
+            "month": mkey,
             "salary": salary,
             "extra": extra,
             "income": income,
@@ -591,8 +618,8 @@ def build_state(rows):
 
     following = None
     if periods:
-        last = date.fromisoformat(periods[-1]["pay_date"])
-        following = "%04d-%02d" % next_month(last.year, last.month)
+        year, month = int(periods[-1]["month"][:4]), int(periods[-1]["month"][5:7])
+        following = "%04d-%02d" % next_month(year, month)
     return {"periods": periods, "next_month": following}
 
 
@@ -615,21 +642,50 @@ def _months_between(start, end):
     return (end[0] - start[0]) * 12 + end[1] - start[1]
 
 
+def _budget_pay_dates(year, month):
+    """Даты зарплат бюджет-месяца: 17-е число этого месяца и 3-е следующего
+    (месяц M = 17.M + 03.(M+1))."""
+    next_year, next_month_ = next_month(year, month)
+    return [
+        pay_date_for(year, month, PAY_DAYS[1]),
+        pay_date_for(next_year, next_month_, PAY_DAYS[0]),
+    ]
+
+
+def _copy_period(day, source):
+    """Строки нового периода: копируются только постоянные статьи (включая сумму 0)
+    и зарплата исходного периода."""
+    salary = _period_salary(source)
+    copied = [row for row in source if row["name"] and row["permanent"]]
+    return [
+        _new_row(day, salary, row["name"], True, row["amount"]) for row in copied
+    ] or [_new_row(day, salary)]
+
+
+def _latest_slot_rows(rows, first_slot, before):
+    """Строки последней зарплаты нужного слота раньше даты before."""
+    candidates = [
+        row for row in rows
+        if _first_slot(row["date"]) == first_slot and row["date"] < before
+    ]
+    if not candidates:
+        return []
+    last = max(row["date"] for row in candidates)
+    return [row for row in candidates if row["date"] == last]
+
+
 def _build_chain(groups, start, count):
     """count месяцев подряд, начиная со start. Каждый месяц копирует предыдущий:
     только постоянные статьи (в том числе с суммой 0) и зарплату своего периода.
-    groups — [строки первой зарплаты, строки второй] источника."""
+    groups — [строки «второй» зарплаты (17-е), строки «первой» (3-е след. месяца)]
+    источника; порядок соответствует _budget_pay_dates."""
     months = []
     year, month = start
     for _ in range(count):
-        periods = []
-        for day, group in zip(month_pay_dates(year, month), groups):
-            salary = _period_salary(group)
-            copied = [row for row in group if row["name"] and row["permanent"]]
-            periods.append(
-                [_new_row(day, salary, row["name"], True, row["amount"]) for row in copied]
-                or [_new_row(day, salary)]
-            )
+        periods = [
+            _copy_period(day, group)
+            for day, group in zip(_budget_pay_dates(year, month), groups)
+        ]
         months.append(periods)
         groups = periods
         year, month = next_month(year, month)
@@ -639,48 +695,58 @@ def _build_chain(groups, start, count):
 def plan_new_months(rows, expected=None, salaries=None):
     """Строки новых месяцев (без id) и дата первой зарплаты последнего из них.
 
-    Лист не пуст: создаются все месяцы от следующего за последним существующим
-    до expected включительно (expected не задан — только следующий), и каждый
-    копирует предыдущий. Лист пуст: месяц и две зарплаты задаёт пользователь.
-    Строки возвращаются в порядке вставки под шапку: сверху самый новый месяц,
-    внутри месяца 17-е выше 3-го. В каждой строке seq — порядок создания (для id).
+    Бюджет-месяц M — зарплаты 17.M и 03.(M+1). Если у последнего месяца не хватает
+    второй зарплаты (3-е следующего месяца ещё не создано), она добавляется
+    «добивкой» — так прошлые месяцы приводятся к новой схеме.
+    Лист не пуст: создаются все месяцы от следующего за последним до expected
+    включительно (expected не задан — только следующий), и каждый копирует
+    предыдущий. Лист пуст: месяц и две зарплаты задаёт пользователь.
+    Строки возвращаются в порядке вставки под шапку: сверху самые новые.
+    В каждой строке seq — порядок создания (для id).
     """
     active = [row for row in rows if not row["deleted"]]
     if not active:
         if not expected or not salaries:
             raise BudgetError("Укажи месяц и суммы двух зарплат")
-        groups = [[_new_row(None, salaries[0])], [_new_row(None, salaries[1])]]
+        # позиция 0 — «вторая» зарплата (17-е), позиция 1 — «первая» (3-е след. месяца)
+        groups = [[_new_row(None, salaries[1])], [_new_row(None, salaries[0])]]
         months = _build_chain(groups, expected, 1)
+        extra = []
     else:
-        last_day = max(row["date"] for row in active)
-        first = next_month(last_day.year, last_day.month)
+        dates = sorted({row["date"] for row in active})
+        last_key = _month_keys(dates)[-1]
+        first = next_month(int(last_key[:4]), int(last_key[5:7]))
         target = expected or first
         gap = _months_between(first, target)
         if gap < 0:
             raise BudgetError("Этот месяц уже создан или данные изменились. Обнови страницу.", 409)
         if gap + 1 > MAX_MONTHS_AHEAD:
             raise BudgetError(f"За один раз можно добавить не больше {MAX_MONTHS_AHEAD} месяцев")
-        source_dates = sorted({
-            row["date"] for row in active
-            if (row["date"].year, row["date"].month) == (last_day.year, last_day.month)
-        })
-        # обычно в последнем месяце две зарплаты; если одна — копируем её в обе
+
+        # «добивка»: 3-е число первого нового месяца завершает предыдущий месяц
+        backfill_day = pay_date_for(first[0], first[1], PAY_DAYS[0])
+        extra = []
+        effective = list(active)
+        if not any(not row["deleted"] and row["date"] == backfill_day for row in rows):
+            extra = [_copy_period(backfill_day, _latest_slot_rows(active, True, backfill_day))]
+            effective += extra[0]
+
+        pay_dates = _budget_pay_dates(*first)
         groups = [
-            [row for row in active if row["date"] == source_dates[0]],
-            [row for row in active if row["date"] == source_dates[-1]],
+            _latest_slot_rows(effective, False, pay_dates[0]),
+            _latest_slot_rows(effective, True, pay_dates[1]),
         ]
         months = _build_chain(groups, first, gap + 1)
 
+    chrono = extra + [period for month in months for period in month]
     seq = 0
-    for periods in months:                     # id раздаём в хронологическом порядке
-        for period_rows in periods:
-            for row in period_rows:
-                row["seq"] = seq
-                seq += 1
+    for period in chrono:                     # id раздаём в хронологическом порядке
+        for row in period:
+            row["seq"] = seq
+            seq += 1
     ordered = []
-    for periods in reversed(months):           # лист: от новых к старым
-        for period_rows in reversed(periods):
-            ordered.extend(period_rows)
+    for period in reversed(chrono):           # лист: от новых к старым
+        ordered.extend(period)
     return ordered, months[-1][0][0]["date"]
 
 
