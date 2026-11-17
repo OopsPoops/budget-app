@@ -2,22 +2,20 @@
 <html lang="ru" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://budget-app-x2s2.onrender.com https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://budget-app-x2s2.onrender.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f3f4fb">
 <title>Бюджет</title>
 <script>
+// Тема: по умолчанию светлая (системную не учитываем), если пользователь выбрал тёмную — помним.
 (function(){
-  var mq=window.matchMedia('(prefers-color-scheme: dark)');
-  function apply(){
-    document.documentElement.setAttribute('data-theme',mq.matches?'dark':'light');
-    var m=document.querySelector('meta[name="theme-color"]');
-    if(m)m.setAttribute('content',mq.matches?'#05060a':'#f3f4fb');
-  }
-  apply();
-  if(mq.addEventListener)mq.addEventListener('change',apply);else if(mq.addListener)mq.addListener(apply);
+  var t='light';
+  try{var s=localStorage.getItem('budget_theme');if(s==='dark'||s==='light')t=s;}catch(e){}
+  document.documentElement.setAttribute('data-theme',t);
+  var m=document.querySelector('meta[name="theme-color"]');
+  if(m)m.setAttribute('content',t==='dark'?'#05060a':'#f3f4fb');
 })();
 </script>
 <style>
@@ -136,14 +134,7 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-list.noanim .bd-row{transition:none}
 .bd-row:active{background:var(--input-bg)}
 .bd-row.lifted{z-index:6;border-radius:16px;border-top-color:transparent;box-shadow:0 14px 34px rgba(0,0,0,.24),0 0 0 .5px var(--card-border);transition:box-shadow .2s;cursor:grabbing;background:var(--card)}
-.bd-grip{flex:none;width:38px;height:62px;display:grid;place-items:center;color:var(--muted);opacity:.7;cursor:grab;touch-action:none;-webkit-tap-highlight-color:transparent}
-.bd-grip{position:relative}
-.bd-grip svg{position:relative;width:18px;height:14px}
-.bd-grip::before{content:"";position:absolute;left:3px;right:3px;top:13px;bottom:13px;border-radius:14px;background:var(--blue);opacity:0;transform:scale(.3)}
-.bd-grip.holding::before{animation:bdHold var(--hold,2000ms) linear forwards}
-.bd-grip.holding{color:var(--text);opacity:1}
-@keyframes bdHold{from{opacity:.05;transform:scale(.3)}to{opacity:.3;transform:scale(1)}}
-.bd-row.lifted .bd-grip{color:var(--blue);opacity:1}
+/* строку перетаскивают долгим нажатием в любом месте (стили .holding и .lifted ниже) */
 .bd-name{flex:1;min-width:0}
 .bd-name b{display:block;font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bd-name small{display:block;margin-top:2px;font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -222,18 +213,62 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-link:active{background:var(--input-bg)}
 .bd-link:disabled{opacity:.5}
 
+/* ============================================================
+   Дополнения: шапка, тема, отметка «выполнено», мерцание, автозаполнение
+   ============================================================ */
+:root{--hold-tint:rgba(82,103,232,.16)}
+:root[data-theme="dark"]{--hold-tint:rgba(143,155,255,.26)}
+
+/* шапка: иконки рядом с «Выйти» */
+.page-heading{min-width:0}
+.topbar-actions{flex:none;display:flex;align-items:center;gap:8px}
+.icon-btn{flex:none;width:40px;height:40px;padding:0;border-radius:13px;border:1px solid var(--card-border);background:var(--card-grad);color:var(--muted);box-shadow:var(--shadow);display:grid;place-items:center;cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent;transition:transform .3s cubic-bezier(.34,1.5,.4,1)}
+.icon-btn:active{transform:scale(.93)}
+.icon-btn svg{display:block;width:22px;height:22px}
+.icon-btn.sheet svg{width:26px;height:26px}
+.theme-btn .ico-sun{display:none}
+:root[data-theme="dark"] .theme-btn .ico-sun{display:block}
+:root[data-theme="dark"] .theme-btn .ico-moon{display:none}
+
+/* вход: подписи полей прижаты к левому краю */
+.login-card .field>span{text-align:left;padding-left:2px}
+
+/* автозаполнение браузера: свой фон и цвет текста вместо жёлтой подсветки */
+input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus,input:-webkit-autofill:active{-webkit-text-fill-color:var(--input-text)!important;caret-color:var(--input-text);-webkit-box-shadow:0 0 0 1000px var(--input-bg) inset!important;box-shadow:0 0 0 1000px var(--input-bg) inset!important;border-color:var(--line);transition:background-color 600000s 0s,color 600000s 0s}
+input:autofill{-webkit-text-fill-color:var(--input-text)!important;box-shadow:0 0 0 1000px var(--input-bg) inset!important}
+
+/* отметка «выполнено» */
+.bd-check{flex:none;width:48px;height:62px;border:0;padding:0;background:transparent;display:grid;place-items:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.bd-check svg{display:block;width:26px;height:26px;overflow:visible;transition:transform .3s cubic-bezier(.34,1.5,.4,1)}
+.bd-check:active svg{transform:scale(.86)}
+.bd-check .ring{fill:transparent;stroke:var(--muted);stroke-width:1.8;opacity:.75;transition:fill .2s,stroke .2s,opacity .2s}
+.bd-check .tick{fill:none;stroke:var(--bd-on-accent,#fff);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:16;stroke-dashoffset:16;transition:stroke-dashoffset .28s ease .05s}
+.bd-row.done .bd-check .ring{fill:var(--bd-ok);stroke:var(--bd-ok);opacity:1}
+.bd-row.done .bd-check .tick{stroke-dashoffset:0}
+.bd-row.done .bd-name b{text-decoration:line-through;text-decoration-thickness:1.5px;color:var(--muted);font-weight:650}
+.bd-row.done .bd-sum{color:var(--muted);font-weight:650}
+.bd-row.done{opacity:.82}
+
+/* мерцание строки: держишь нажатым — через 2 секунды строку можно тащить */
+.bd-row.holding{animation:bdShimmer .6s ease-in-out infinite}
+@keyframes bdShimmer{
+ 0%,100%{box-shadow:inset 0 0 0 0 var(--hold-tint),inset 0 0 0 0 var(--blue)}
+ 50%{box-shadow:inset 0 0 0 80px var(--hold-tint),inset 0 0 0 2px var(--blue)}
+}
+
+/* кнопки в окне статьи: аккуратно закруглены */
+.bd-save,.btn-cancel{border-radius:16px}
+.bd-save{font-weight:750;cursor:pointer;transition:transform .3s cubic-bezier(.34,1.5,.4,1),opacity .2s}
+.bd-save:active{transform:scale(.97)}
+.bd-save:disabled{opacity:.55}
+
 </style>
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
-<symbol id="i-grip" viewBox="0 0 18 14"><path d="M1.5 2h15M1.5 7h15M1.5 12h15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-</defs></svg>
 <div id="bootView" class="boot"></div>
 
 <main id="loginView" class="login-wrap" hidden>
-  <form class="login-card" id="loginForm">
-    <div class="login-ico">💰</div>
-    <h1>Бюджет</h1>
+  <form class="login-card" id="loginForm" aria-label="Вход">
     <label class="field"><span>Логин</span><input class="value-input bd-left" id="loginUser" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
     <label class="field"><span>Пароль</span><input class="value-input bd-left" id="loginPass" type="password" autocomplete="current-password" required></label>
     <button class="bd-add" type="submit" id="loginBtn">Войти</button>
@@ -244,7 +279,16 @@ button.bd-stat:active{transform:scale(.97)}
 <div class="app" id="budgetView" hidden>
   <div class="topbar">
     <h1 class="page-heading">Бюджет</h1>
-    <button class="logout" id="logout" type="button">Выйти</button>
+    <div class="topbar-actions">
+      <button class="icon-btn theme-btn" id="themeToggle" type="button" aria-label="Включить тёмную тему" title="Сменить тему">
+        <svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z"/></svg>
+        <svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
+      </button>
+      <a class="icon-btn sheet" id="sheetLink" href="#" target="_blank" rel="noopener noreferrer" aria-label="Открыть таблицу" title="Открыть таблицу" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="xlG" x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3fcf8e"/><stop offset="1" stop-color="#0f7b43"/></linearGradient></defs><rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill="url(#xlG)"/><path d="M8.3 8.2l7.4 7.6M15.7 8.2l-7.4 7.6" stroke="#fff" stroke-width="2.3" stroke-linecap="round"/></svg>
+      </a>
+      <button class="logout" id="logout" type="button">Выйти</button>
+    </div>
   </div>
   <div id="budgetBody"></div>
 </div>
@@ -286,8 +330,28 @@ const vibrate=pattern=>{try{if(navigator.vibrate)navigator.vibrate(pattern);}cat
 const uiHaptic=kind=>vibrate(kind==='error'?[20,40,20]:12);
 const selectionHaptic=()=>vibrate(6);
 
+// ---------- тема: по умолчанию светлая, выбор запоминается ----------
+const THEME_KEY='budget_theme';
+function applyTheme(theme,save){
+  document.documentElement.setAttribute('data-theme',theme);
+  const meta=document.querySelector('meta[name="theme-color"]');
+  if(meta)meta.setAttribute('content',theme==='dark'?'#05060a':'#f3f4fb');
+  const btn=$('themeToggle');
+  if(btn){
+    const label=theme==='dark'?'Включить светлую тему':'Включить тёмную тему';
+    btn.setAttribute('aria-label',label);
+    btn.title=label;
+  }
+  if(save){try{localStorage.setItem(THEME_KEY,theme);}catch(e){}}
+}
+applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light',false);
+$('themeToggle').addEventListener('click',()=>{
+  applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark',true);
+  selectionHaptic();
+});
+
 // ---------- вход по логину и паролю (как было) ----------
-const API="https://script.google.com/macros/s/AKfycbw2S8nKASSRnuIu_gW60rnr26mUgySNp1Kk0yxG91EcId_gBSqcpErzmnrIjX98_UUb/exec";
+const API="https://budget-app-x2s2.onrender.com";
 const TOKEN_KEY="budget_token";
 
 function getToken(){try{return localStorage.getItem(TOKEN_KEY);}catch(e){return null;}}
@@ -298,28 +362,17 @@ function setToken(t){
   }catch(e){}
 }
 
-
 async function api(path,options={}){
-  const method=(options.method||"GET").toUpperCase();
+  const headers={"Content-Type":"application/json"};
   const token=getToken();
-  const payload={
-    method,
-    path,
-    token:token||"",
-    body:options.body||"{}"
-  };
-  const res=await fetch(API,{
-    method:"POST",
-    headers:{"Content-Type":"text/plain"},
-    body:JSON.stringify(payload)
-  });
-  const proxy=await res.json();
-  const status=Number(proxy.status||502);
+  if(token)headers["Authorization"]="Bearer "+token;
+  const opts={credentials:"include",headers,...options};
+  if(options.headers)opts.headers={...headers,...options.headers};
+  const res=await fetch(API+path,opts);
   let data=null;
-  try{data=JSON.parse(proxy.body);}catch(e){data={error:proxy.body||"Proxy error"};}
-  return {status,ok:status>=200&&status<300,data};
+  try{data=await res.json();}catch(e){}
+  return {status:res.status,ok:res.ok,data};
 }
-
 
 // запрос бюджета: возвращает data, при ошибке бросает Error со status; 401 — сразу на экран входа
 async function request(path,options){
@@ -420,7 +473,7 @@ const MONTHS=['Январь','Февраль','Март','Апрель','Май'
 const MONTHS_GEN=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WEEKDAYS=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
 const MAX_AHEAD=24;    // сколько месяцев вперёд можно добавить за раз (как на сервере)
-const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false};
+const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0};
 const nf=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2});
 const money=n=>nf.format(n)+'\u00a0₽';
 const signed=n=>n>0?'+'+money(n):money(n);      // положительный остаток — со знаком «+»
@@ -460,8 +513,20 @@ function defaultSel(periods){
  const upcoming=periods.find(p=>p.pay_date>=today);
  return (upcoming||periods[periods.length-1]).pay_date;
 }
+// Ссылка на Google Таблицу в шапке: показываем, только если адрес точно похож на ссылку на таблицу Google.
+function setSheetLink(url){
+ const a=$('sheetLink');
+ if(typeof url==='string'&&/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[\w-]+\/edit(#gid=\d+)?$/.test(url)){
+  a.href=url;
+  a.hidden=false;
+ }else{
+  a.hidden=true;
+  a.removeAttribute('href');
+ }
+}
 function adopt(data,focus){
  S.state=data;
+ setSheetLink(data.sheet_url);
  const dates=data.periods.map(p=>p.pay_date);
  if(focus&&dates.includes(focus)){S.sel=focus;S.ghost=null;return;}
  // пока смотрели «ещё не созданный» месяц, его могли создать — тогда показываем уже настоящий
@@ -540,9 +605,9 @@ function summaryHtml(p){
 }
 function rowHtml(it){
  const zero=it.amount===0;
- return '<div class="bd-row'+(zero?' zero':'')+'" data-id="'+it.id+'">'
-  +'<span class="bd-grip" role="img" aria-label="Чтобы изменить порядок, подержи и тащи"><svg><use href="#i-grip"/></svg></span>'
-  +'<div class="bd-name"><b>'+esc(it.name)+'</b><small>'+(it.permanent?'Постоянная':'Разовая')+(zero?' · не учитывается':'')+'</small></div>'
+ return '<div class="bd-row'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
+  +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button>'
+  +'<div class="bd-name"><b>'+esc(it.name)+'</b><small>'+(it.permanent?'Постоянная':'Разовая')+(zero?' · не учитывается':'')+(it.done?' · выполнена':'')+'</small></div>'
   +'<div class="bd-sum">'+money(it.amount)+'</div></div>';
 }
 function firstHtml(){
@@ -559,8 +624,9 @@ function bodyHtml(){
  if(S.ghost)return ghostHtml(S.ghost);
  const p=current()||st.periods[0];
  const n=p.items.length;
+ const nd=p.items.filter(x=>x.done).length;
  return heroHtml(p)
-  +'<section class="bd-card"><div class="bd-card-head">Статьи расходов<span>'+n+' '+plural(n,['статья','статьи','статей'])+'</span></div>'
+  +'<section class="bd-card"><div class="bd-card-head">Статьи расходов<span>'+n+' '+plural(n,['статья','статьи','статей'])+(nd?' · выполнено '+nd:'')+'</span></div>'
   +'<div class="bd-list" id="bdList">'+(n?p.items.map(rowHtml).join(''):'<div class="bd-empty">Статей пока нет. Добавь первую кнопкой ниже.</div>')+'</div></section>'
   +'<button class="bd-add" type="button" data-act="add"><span class="bd-plus">+</span>Добавить статью</button>'
   +summaryHtml(p);
@@ -753,7 +819,59 @@ function parseMoney(raw,title){
  if(!(n<=1e9))return {error:title+': слишком большая сумма'};
  return {value:n};
 }
-const amountText=n=>String(n).replace('.',',');
+// Суммы в полях ввода показываются с пробелами между тысячами: 1 500, 120 000, 1 234 567,50
+const groupDigits=s=>s.replace(/\B(?=(\d{3})+(?!\d))/g,' ');
+function amountText(n){
+ const parts=String(n).split('.');
+ return groupDigits(parts[0])+(parts[1]?','+parts[1]:'');
+}
+// При наборе сумма сразу приобретает разряды; курсор остаётся рядом с тем, что было введено.
+function formatMoneyInput(el){
+ const raw=el.value;
+ const pos=el.selectionStart===null?raw.length:el.selectionStart;
+ const before=raw.slice(0,pos).replace(/[^\d.,]/g,'').length;      // сколько цифр и запятых слева от курсора
+ const cleaned=raw.replace(/[^\d.,]/g,'');
+ const cut=cleaned.search(/[.,]/);
+ let whole=cut<0?cleaned:cleaned.slice(0,cut);
+ const frac=cut<0?null:cleaned.slice(cut+1).replace(/[.,]/g,'').slice(0,2);
+ whole=whole.replace(/^0+(?=\d)/,'');
+ const out=groupDigits(whole)+(frac===null?'':','+frac);
+ if(out===raw)return;
+ el.value=out;
+ let seen=0,at=0;
+ while(at<out.length&&seen<before){if(/[\d,]/.test(out[at]))seen++;at++;}
+ try{el.setSelectionRange(at,at);}catch(e){}
+}
+$('bdFormBody').addEventListener('input',e=>{
+ if(e.target.matches('input[inputmode="decimal"]'))formatMoneyInput(e.target);
+});
+
+// ---------- отметка «выполнено» ----------
+// Кружок слева от статьи: сначала меняем экран (быстро), потом сохраняем на сервере.
+// Запросы идут по очереди, чтобы быстрые нажатия не перепутались; при ошибке возвращаем прежнее состояние.
+let doneChain=Promise.resolve();
+function toggleDone(id){
+ if(S.dragging||!S.state)return;
+ const p=current();
+ const it=p&&p.items.find(x=>x.id===id);
+ if(!it)return;
+ const next=!it.done;
+ it.done=next;
+ render();
+ selectionHaptic();
+ S.doneOps++;
+ doneChain=doneChain.then(async()=>{
+  try{
+   const data=await call('item/done',{id,done:next});
+   S.doneOps--;
+   if(S.doneOps===0&&!S.busy&&!S.dragging&&isOpen()){S.seq++;adopt(data);render();}
+  }catch(error){
+   S.doneOps--;
+   alertError(error);
+   if(!(error&&error.status===401))load(false);
+  }
+ });
+}
 
 // ---------- статьи ----------
 function itemFields(it){
@@ -941,17 +1059,18 @@ host.addEventListener('click',e=>{
    case 'create':createMonths(t.dataset.month);break;
    case 'first':openFirstMonth();break;
    case 'retry':load(true);break;
+   case 'done':toggleDone(Number(t.dataset.id));break;
   }
   return;
  }
  if(S.noClick)return;
  const row=e.target.closest('.bd-row');
- if(row&&!e.target.closest('.bd-grip'))openEditItem(Number(row.dataset.id));
+ if(row)openEditItem(Number(row.dataset.id));
 });
 
 // ---------- перетаскивание статей ----------
-// Порядок меняется только за три полоски и только после удержания HOLD_MS: так статью не сдвинуть случайно.
-// Пока палец держат, полоски заполняются цветом; когда строка «поднялась», её можно тащить.
+// Порядок меняется долгим нажатием на строку в любом месте: удерживаешь HOLD_MS (2 секунды) — строка мерцает,
+// потом «поднимается», и её можно тащить. Короткое нажатие по-прежнему открывает окно статьи.
 (function initDrag(){
  const HOLD_MS=2000;
  let d=null,press=null,raf=0,lastY=0;
@@ -1005,27 +1124,27 @@ host.addEventListener('click',e=>{
  function cancelHold(){
   if(!press)return;
   clearTimeout(press.timer);
-  press.grip.classList.remove('holding');
+  clearTimeout(press.visual);
+  press.row.classList.remove('holding');
   press=null;
  }
  host.addEventListener('pointerdown',e=>{
   if(d||(e.pointerType==='mouse'&&e.button!==0))return;
-  const grip=e.target.closest('.bd-grip');
-  const row=grip&&grip.closest('.bd-row');
+  if(e.target.closest('.bd-check'))return;               // кружок «выполнено» — отдельная кнопка
+  const row=e.target.closest('.bd-row');
   const list=row&&row.closest('.bd-list');
-  if(!grip||!row||!list||S.busy||S.dragging)return;
-  e.preventDefault();
+  if(!row||!list||S.busy||S.dragging)return;
+  if(list.querySelectorAll('.bd-row').length<2)return;   // одну статью переставлять некуда
   cancelHold();
-  const p={id:e.pointerId,ox:e.clientX,oy:e.clientY,y:e.clientY,grip};
-  try{grip.setPointerCapture(e.pointerId);}catch(_){}
-  grip.style.setProperty('--hold',HOLD_MS+'ms');
-  grip.classList.add('holding');
+  const p={id:e.pointerId,ox:e.clientX,oy:e.clientY,y:e.clientY,row};
+  // Мерцать начинаем не сразу, а через 0,35 с: короткое нажатие (открыть окно) не должно мигать.
+  p.visual=setTimeout(()=>{if(press===p&&row.isConnected)row.classList.add('holding');},350);
   p.timer=setTimeout(()=>{
    if(press!==p)return;
    press=null;
-   grip.classList.remove('holding');
-   if(!grip.isConnected)return;          // экран успели перерисовать — начинать нечего
-   start(list,row,p.id,p.y,grip);
+   row.classList.remove('holding');
+   if(!row.isConnected)return;          // экран успели перерисовать — начинать нечего
+   start(list,row,p.id,p.y,row);
   },HOLD_MS);
   press=p;
  });
@@ -1040,7 +1159,7 @@ host.addEventListener('click',e=>{
   lastY=e.clientY;
   update();
  });
- host.addEventListener('contextmenu',e=>{if(e.target.closest('.bd-grip'))e.preventDefault();});
+ host.addEventListener('contextmenu',e=>{if(e.target.closest('.bd-row'))e.preventDefault();});
  const end=e=>{
   if(press&&e.pointerId===press.id)cancelHold();
   if(!d||e.pointerId!==d.id)return;
@@ -1110,13 +1229,15 @@ window.Budget={
  },
  // вернулись на вкладку: подтягиваем изменения, сделанные с другого устройства
  refresh(){
-  if(!isOpen()||!S.state||S.busy||S.dragging||asking||formOpen())return;
+  if(!isOpen()||!S.state||S.busy||S.dragging||S.doneOps>0||asking||formOpen())return;
   load(false);
  },
  // выход: ничего из бюджета не остаётся на экране
  close(){
   S.seq++;
   S.state=null;S.sel=null;S.ghost=null;S.busy=false;S.dragging=false;
+  S.doneOps=0;
+  setSheetLink(null);
   form.busy=false;
   $('budgetFormBackdrop').classList.remove('visible');
   if(asking)closeSheet(null);
