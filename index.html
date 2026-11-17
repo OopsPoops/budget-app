@@ -2,7 +2,7 @@
 <html lang="ru" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://budget-app-x2s2.onrender.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://budget-app-x2s2.onrender.com https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
@@ -351,7 +351,7 @@ $('themeToggle').addEventListener('click',()=>{
 });
 
 // ---------- вход по логину и паролю (как было) ----------
-const API="https://budget-app-x2s2.onrender.com";
+const API="https://script.google.com/macros/s/AKfycbw2S8nKASSRnuIu_gW60rnr26mUgySNp1Kk0yxG91EcId_gBSqcpErzmnrIjX98_UUb/exec";
 const TOKEN_KEY="budget_token";
 
 function getToken(){try{return localStorage.getItem(TOKEN_KEY);}catch(e){return null;}}
@@ -363,15 +363,24 @@ function setToken(t){
 }
 
 async function api(path,options={}){
-  const headers={"Content-Type":"application/json"};
+  const method=(options.method||"GET").toUpperCase();
   const token=getToken();
-  if(token)headers["Authorization"]="Bearer "+token;
-  const opts={credentials:"include",headers,...options};
-  if(options.headers)opts.headers={...headers,...options.headers};
-  const res=await fetch(API+path,opts);
+  const payload={
+    method,
+    path,
+    token:token||"",
+    body:options.body||"{}"
+  };
+  const res=await fetch(API,{
+    method:"POST",
+    headers:{"Content-Type":"text/plain"},
+    body:JSON.stringify(payload)
+  });
+  const proxy=await res.json();
+  const status=Number(proxy.status||502);
   let data=null;
-  try{data=await res.json();}catch(e){}
-  return {status:res.status,ok:res.ok,data};
+  try{data=JSON.parse(proxy.body);}catch(e){data={error:proxy.body||"Proxy error"};}
+  return {status,ok:status>=200&&status<300,data};
 }
 
 // запрос бюджета: возвращает data, при ошибке бросает Error со status; 401 — сразу на экран входа
