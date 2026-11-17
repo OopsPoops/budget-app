@@ -148,6 +148,7 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-tag.once{background:color-mix(in srgb,var(--blue) 14%,transparent)}
 }
 .bd-sum{flex:none;max-width:44%;font-size:17px;font-weight:800;letter-spacing:-.3px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bd-sum s.was{color:var(--muted);font-weight:600;font-size:12.5px;text-decoration-thickness:1.5px;margin-right:7px;vertical-align:1px}
 .bd-row.zero .bd-name b,.bd-row.zero .bd-sum{color:var(--muted);font-weight:650}
 .bd-row.zero{opacity:.72}
 .bd-empty{padding:20px 18px 22px;border-top:1px solid var(--line);text-align:center;color:var(--muted);font-size:14px;line-height:1.45}
@@ -624,9 +625,10 @@ function summaryHtml(p){
 function rowHtml(it){
  const zero=it.amount===0;
  const tagLabel=it.permanent?'Постоянная':'Разовая';
+ const sum=it.was?'<s class="was">'+money(it.was)+'</s><span class="now">'+money(0)+'</span>':money(it.amount);
  return '<div class="bd-row'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
   +'<div class="bd-name"><div class="bd-title"><i class="bd-tag '+(it.permanent?'perm':'once')+'" role="img" aria-label="'+tagLabel+' статья" title="'+tagLabel+' статья">'+(it.permanent?'П':'Р')+'</i><b>'+esc(it.name)+'</b></div></div>'
-  +'<div class="bd-sum">'+money(it.amount)+'</div>'
+  +'<div class="bd-sum">'+sum+'</div>'
   +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
 }
 function firstHtml(){
@@ -898,7 +900,8 @@ function itemFields(it){
  return '<label class="field"><span>Название</span><input class="value-input bd-left" id="bdName" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" placeholder="Например, Аренда" value="'+esc(it?it.name:'')+'"></label>'
   +'<label class="field"><span>Сумма, ₽</span><input class="value-input" id="bdAmount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.amount):'')+'"></label>'
   +'<div class="field"><span>Постоянная статья</span><div class="bd-seg" id="bdPerm"><button type="button" data-v="1" class="'+(perm?'on':'')+'">Да</button><button type="button" data-v="0" class="'+(perm?'':'on')+'">Нет</button></div></div>'
-  +'<div class="bd-hint">«Да» — статья копируется в новые месяцы. «Нет» — только в этой зарплате.</div>';
+  +'<div class="bd-hint">«Да» — статья копируется в новые месяцы. «Нет» — только в этой зарплате.</div>'
+  +(it&&it.was?'<div class="bd-hint">Сейчас 0 ₽ — в следующей зарплате вернётся '+money(it.was)+'.</div>':'');
 }
 function readItemForm(){
  const name=$('bdName').value.replace(/\s+/g,' ').trim();
@@ -944,7 +947,7 @@ function openEditItem(id){
   icon:'✏️',title:'Статья',html:itemFields(it),
   onSave:()=>saveItem(it,null),
   links:[
-   {id:'zero',text:'Поставить 0 ₽',run:()=>saveItem(it,0)},
+   ...(it.was?[]:[{id:'zero',text:'Поставить 0 ₽',run:()=>saveItem(it,0)}]),
    {id:'delete',text:'Удалить запись',danger:true,run:async()=>{
      uiHaptic('error');
      const choice=await ask('Удалить запись?','Статья «'+it.name+'» исчезнет из этой зарплаты. В таблице запись останется с пометкой удаления.',[{id:'del',type:'destructive',text:'Удалить'},{id:'cancel',type:'cancel'}]);
