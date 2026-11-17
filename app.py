@@ -316,10 +316,13 @@ def logout():
 
 BUDGET_SHEET = "cost"
 BUDGET_HEADER = [
-    "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg", "extra_income"
+    "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg", "extra_income",
+    "done_flg"
 ]
 BUDGET_COLUMNS = len(BUDGET_HEADER)
-LAST_COLUMN = "H"
+LAST_COLUMN = "I"           # последняя колонка листа (вся строка записи — A:I)
+EXTRA_COLUMN = "H"          # доп. заработок
+DONE_COLUMN = "I"           # отметка «статья выполнена»: 1 — да, пусто или 0 — нет
 DATE_FORMAT = {"type": "DATE", "pattern": "dd.MM.yyyy"}
 SHEETS_EPOCH = date(1899, 12, 30)
 PAY_DAYS = (3, 17)          # две зарплаты в месяц
@@ -531,6 +534,7 @@ def parse_rows(values):
             "amount": 0 if amount is None else amount,
             "deleted": _truthy(cells[6]),
             "extra": _lenient_number(cells[7]),
+            "done": _truthy(cells[8]),
             "raw": cells,
         })
     return rows
@@ -569,6 +573,7 @@ def build_state(rows):
                 "name": row["name"],
                 "permanent": row["permanent"],
                 "amount": row["amount"],
+                "done": row["done"],
             }
             for row in group if row["name"]
         ]
@@ -599,10 +604,10 @@ def find_period(state, pay_date):
 
 
 # ======================= Создание нового месяца =======================
-def _new_row(day, salary, name="", permanent=False, amount=0, extra=0):
+def _new_row(day, salary, name="", permanent=False, amount=0, extra=0, done=False):
     return {
         "date": day, "salary": salary, "name": name,
-        "permanent": permanent, "amount": amount, "extra": extra
+        "permanent": permanent, "amount": amount, "extra": extra, "done": done
     }
 
 
@@ -702,6 +707,7 @@ def _values_for_sheet(row_id, row):
         row["amount"],
         0,
         row.get("extra", 0),
+        1 if row.get("done") else 0,
     ]
 
 
@@ -752,6 +758,31 @@ class BudgetStore:
             spreadsheetId=self.store.spreadsheet_id,
             body={"valueInputOption": "RAW", "data": data}
         ).execute(num_retries=3)
+
+    def _ensure_columns(self, sheet_id):
+        """В листе должно хватать столбцов под все колонки записи (старый лист мог быть шире 8,
+        но не шире 9): при нехватке столбцы добавляются справа."""
+        response = self.store.client.spreadsheets().get(
+            spreadsheetId=self.store.spreadsheet_id,
+            fields="sheets.properties(sheetId,gridProperties.columnCount)"
+        ).execute(num_retries=3)
+        for sheet in response.get("sheets", []):
+            props = sheet.get("properties", {})
+            if props.get("sheetId") != sheet_id:
+                continue
+            have = props.get("gridProperties", {}).get("columnCount", 0)
+            if have and have < BUDGET_COLUMNS:
+                self.store.client.spreadsheets().batchUpdate(
+                    spreadsheetId=self.store.spreadsheet_id,
+                    body={"requests": [{
+                        "appendDimension": {
+                            "sheetId": sheet_id,
+                            "dimension": "COLUMNS",
+                            "length": BUDGET_COLUMNS - have
+                        }
+                    }]}
+                ).execute(num_retries=3)
+            return
 
     def _ensure_header(self, values):
         first = values[0] if values else []
@@ -822,6 +853,7 @@ class BudgetStore:
             return None, [], 0
         values = self._read_values()
         if (create or write) and not self._header_ready:
+            self._ensure_columns(sheet_id)
             values = self._ensure_header(values)
             self._header_ready = True
         rows = parse_rows(values)
@@ -896,6 +928,10 @@ class BudgetStore:
         raise BudgetError("Запись не найдена. Обнови страницу.", 404)
 
     # ---------- чтение ----------
+    def sheet_gid(self):
+        """Номер листа cost в таблице (нужен для ссылки), если он уже известен."""
+        return (self.store._sheet_ids or {}).get(BUDGET_SHEET)
+
     def read_rows(self):
         return self._load()[1]
 
@@ -974,13 +1010,23 @@ class BudgetStore:
             ]
         if extra is not None:
             data += [
-                {"range": f"'{BUDGET_SHEET}'!{LAST_COLUMN}{row['row']}", "values": [[extra]]}
+                {"range": f"'{BUDGET_SHEET}'!{EXTRA_COLUMN}{row['row']}", "values": [[extra]]}
                 for row in rows if row["date"] == pay_date
             ]
         if not data:
             raise BudgetError("Нечего менять")
         self._write(data)
         return pay_date.isoformat()
+
+    def set_done(self, item_id, done):
+        """Отметка «выполнено» хранится в столбце done_flg той же строки (1 или 0)."""
+        _, rows, _ = self._load(write=True)
+        row = self._active_item(rows, item_id)
+        self._write([{
+            "range": f"'{BUDGET_SHEET}'!{DONE_COLUMN}{row['row']}",
+            "values": [[1 if done else 0]]
+        }])
+        return row["date"].isoformat()
 
     def reorder(self, pay_date, ids):
         """Новый порядок статей одного периода. Строки остаются на тех же местах таблицы,
@@ -1058,8 +1104,19 @@ def _release_request(request_id):
             _requests.pop(request_id, None)
 
 
+def _sheet_url():
+    """Ссылка на лист cost в Google Таблице (для кнопки в шапке) или None."""
+    sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", sheet_id):
+        return None
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+    gid = _store_call("sheet_gid")
+    return f"{url}#gid={gid}" if isinstance(gid, int) else url
+
+
 def _state_response(extra=None):
     data = build_state(_store_call("read_rows"))
+    data["sheet_url"] = _sheet_url()
     if extra:
         data.update(extra)
     return jsonify({"ok": True, "data": data})
@@ -1136,6 +1193,17 @@ def budget_item_update():
 def budget_item_delete():
     def apply(data):
         return _store_call("delete_item", parse_item_id(data.get("id")))
+    return _budget_mutation(apply)
+
+
+@app.route("/api/budget/item/done", methods=["POST", "OPTIONS"])
+@_login_required
+def budget_item_done():
+    def apply(data):
+        done = data.get("done")
+        if not isinstance(done, bool):
+            raise BudgetError("Отметка «выполнено»: нужно true или false")
+        return _store_call("set_done", parse_item_id(data.get("id")), done)
     return _budget_mutation(apply)
 
 
