@@ -316,13 +316,14 @@ def logout():
 
 BUDGET_SHEET = "cost"
 BUDGET_HEADER = [
-    "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg", "extra_income",
-    "done_flg"
+    "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg",
+    "extra_income", "done_flg", "zero_flg"
 ]
 BUDGET_COLUMNS = len(BUDGET_HEADER)
-LAST_COLUMN = "I"           # последняя колонка листа (вся строка записи — A:I)
+LAST_COLUMN = "J"           # последняя колонка листа (вся строка записи — A:J)
 EXTRA_COLUMN = "H"          # доп. заработок
 DONE_COLUMN = "I"           # отметка «статья выполнена»: 1 — да, пусто или 0 — нет
+ZERO_COLUMN = "J"           # «обнулить только на эту зарплату»: 1 — да, 0 — нет
 DATE_FORMAT = {"type": "DATE", "pattern": "dd.MM.yyyy"}
 SHEETS_EPOCH = date(1899, 12, 30)
 PAY_DAYS = (3, 17)          # две зарплаты в месяц
@@ -561,6 +562,7 @@ def parse_rows(values):
             "deleted": _truthy(cells[6]),
             "extra": _lenient_number(cells[7]),
             "done": _truthy(cells[8]),
+            "zeroed": _truthy(cells[9]),
             "raw": cells,
         })
     return rows
@@ -599,7 +601,8 @@ def build_state(rows):
                 "id": row["id"],
                 "name": row["name"],
                 "permanent": row["permanent"],
-                "amount": row["amount"],
+                "amount": 0 if row["zeroed"] else row["amount"],
+                "was": row["amount"] if row["zeroed"] and row["amount"] else None,
                 "done": row["done"],
             }
             for row in group if row["name"]
@@ -634,7 +637,8 @@ def find_period(state, pay_date):
 def _new_row(day, salary, name="", permanent=False, amount=0, extra=0, done=False):
     return {
         "date": day, "salary": salary, "name": name,
-        "permanent": permanent, "amount": amount, "extra": extra, "done": done
+        "permanent": permanent, "amount": amount, "extra": extra, "done": done,
+        "zeroed": False
     }
 
 
@@ -774,6 +778,7 @@ def _values_for_sheet(row_id, row):
         0,
         row.get("extra", 0),
         1 if row.get("done") else 0,
+        1 if row.get("zeroed") else 0,
     ]
 
 
@@ -1032,10 +1037,22 @@ class BudgetStore:
     def update_item(self, item_id, name, amount, permanent):
         _, rows, _ = self._load(write=True)
         row = self._active_item(rows, item_id)
-        self._write([{
-            "range": f"'{BUDGET_SHEET}'!D{row['row']}:F{row['row']}",
-            "values": [[name, YES if permanent else NO, amount]]
-        }])
+        data = [{
+            "range": f"'{BUDGET_SHEET}'!D{row['row']}:E{row['row']}",
+            "values": [[name, YES if permanent else NO]]
+        }]
+        if amount == 0 and row["amount"]:
+            # обнуление только на эту зарплату: настоящая сумма в таблице остаётся,
+            # в следующем месяце она скопируется без флага и вернётся
+            data.append({
+                "range": f"'{BUDGET_SHEET}'!{ZERO_COLUMN}{row['row']}", "values": [[1]]
+            })
+        else:
+            data += [
+                {"range": f"'{BUDGET_SHEET}'!F{row['row']}", "values": [[amount]]},
+                {"range": f"'{BUDGET_SHEET}'!{ZERO_COLUMN}{row['row']}", "values": [[0]]},
+            ]
+        self._write(data)
         return row["date"].isoformat()
 
     def delete_item(self, item_id):
