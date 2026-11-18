@@ -37,14 +37,33 @@ button{-webkit-tap-highlight-color:transparent}
 .logout{flex:none;height:40px;padding:0 15px;border-radius:13px;border:1px solid var(--card-border);background:var(--card-grad);color:var(--muted);font-size:14px;font-weight:700;box-shadow:var(--shadow);cursor:pointer;transition:transform .3s cubic-bezier(.34,1.5,.4,1)}
 .logout:active{transform:scale(.95)}
 
-.boot{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-.loader-wrap{display:flex;flex-direction:column;gap:12px;width:min(520px,100%);margin:0 auto;padding:0 4px;color:var(--muted);font-size:13px}
-.sk{border-radius:16px}
-.sk-hero{height:120px;border-radius:20px}
-.sk-row{height:56px}
-.shimmer{background:linear-gradient(100deg,var(--input-bg) 30%,var(--card) 50%,var(--input-bg) 70%);background-size:220% 100%;animation:shim 1.4s linear infinite}
+.sk{display:block;border-radius:10px;background:linear-gradient(100deg,var(--input-bg) 30%,var(--card) 50%,var(--input-bg) 70%);background-size:220% 100%;animation:shim 1.4s linear infinite}
 @keyframes shim{from{background-position:120% 0}to{background-position:-120% 0}}
-.loader-cap{margin-top:14px;text-align:center}
+/* скелетон повторяет каркас экрана бюджета: шапка месяца, карточка статей, итоги */
+.skel-hero{background:var(--card-grad);border:1px solid var(--card-border);border-radius:24px;padding:14px 16px 16px;box-shadow:var(--shadow);margin-bottom:12px}
+.skel-mrow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.skel-mrow .sk{width:40px;height:40px;border-radius:13px;flex:none}
+.skel-mrow .sk:nth-child(2){flex:1;height:18px;width:auto}
+.skel-tabs{height:56px;border-radius:15px;margin-bottom:16px}
+.skel-balance{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:14px}
+.skel-balance .sk:first-child{width:108px;height:13px}
+.skel-balance .sk:last-child{width:176px;height:42px}
+.skel-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.skel-pair .sk{height:62px;border-radius:15px}
+.skel-bar{height:7px;border-radius:4px;margin-top:14px}
+.skel-card{background:var(--card-grad);border:1px solid var(--card-border);border-radius:22px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:12px}
+.skel-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px 10px}
+.skel-head .sk{height:16px}
+.skel-head .sk:first-child{width:118px}
+.skel-head .sk:last-child{width:64px}
+.skel-list .skel-row{display:flex;align-items:center;gap:8px;height:62px;padding:0 16px;border-top:1px solid var(--line)}
+.skel-dot{width:24px;height:24px;border-radius:50%;flex:none}
+.skel-txt{flex:1;height:14px;min-width:0}
+.skel-amt{width:58px;height:15px;flex:none}
+.skel-check{width:24px;height:24px;border-radius:50%;flex:none}
+.skel-add{height:52px;border-radius:16px;margin-top:12px}
+.skel-sum{height:250px;border-radius:22px;margin-top:12px}
+.loader-cap{margin-top:16px;text-align:center;color:var(--muted);font-size:13px}
 .typing{display:inline-flex;gap:3px;margin-left:2px;vertical-align:middle}
 .typing i{width:5px;height:5px;border-radius:50%;background:var(--muted);opacity:.25;animation:tdot 1.5s ease-in-out infinite}
 .typing i:nth-child(2){animation-delay:.2s}
@@ -285,8 +304,6 @@ input:autofill{-webkit-text-fill-color:var(--input-text)!important;box-shadow:0 
 </style>
 </head>
 <body>
-<div id="bootView" class="boot"></div>
-
 <main id="loginView" class="login-wrap" hidden>
   <form class="login-card" id="loginForm" aria-label="Вход">
     <label class="field"><span>Логин</span><input class="value-input bd-left" id="loginUser" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
@@ -310,7 +327,8 @@ input:autofill{-webkit-text-fill-color:var(--input-text)!important;box-shadow:0 
       <button class="logout" id="logout" type="button">Выйти</button>
     </div>
   </div>
-  <div id="budgetBody"></div>
+  <div id="bootBody"></div>
+  <div id="budgetBody" hidden></div>
 </div>
 
 <div class="modal-backdrop" id="budgetFormBackdrop">
@@ -345,9 +363,16 @@ const $=id=>document.getElementById(id);
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function setToast(el,message,type){el.textContent=message||'';el.className='toast'+(type?' '+type:'');}
 function loadingContent(text){
- return '<div class="loader-wrap"><div class="sk sk-hero shimmer"></div>'
-  +'<div class="sk-row shimmer"></div><div class="sk-row shimmer"></div><div class="sk-row shimmer"></div><div class="sk-row shimmer"></div>'
-  +'<div class="loader-cap"><span class="loader-text">'+escapeHtml(text)+'</span><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></div></div>';
+ const row='<div class="skel-row"><i class="sk skel-dot"></i><i class="sk skel-txt"></i><i class="sk skel-amt"></i><i class="sk skel-check"></i></div>';
+ return '<div class="skel-hero"><div class="skel-mrow"><i class="sk"></i><i class="sk"></i><i class="sk"></i></div>'
+  +'<div class="sk skel-tabs"></div>'
+  +'<div class="skel-balance"><i class="sk"></i><i class="sk"></i></div>'
+  +'<div class="skel-pair"><i class="sk"></i><i class="sk"></i></div>'
+  +'<div class="sk skel-bar"></div></div>'
+  +'<div class="skel-card"><div class="skel-head"><i class="sk"></i><i class="sk"></i></div>'
+  +'<div class="skel-list">'+row+row+row+row+'</div></div>'
+  +'<div class="sk skel-add"></div><div class="sk skel-sum"></div>'
+  +'<div class="loader-cap"><span class="loader-text">'+escapeHtml(text)+'</span><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></div>';
 }
 function hideKeyboard(){const a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur();}
 const vibrate=pattern=>{try{if(navigator.vibrate)navigator.vibrate(pattern);}catch(e){}};
@@ -427,15 +452,22 @@ const get=path=>request(path);
 const post=(path,payload)=>request(path,{method:'POST',body:JSON.stringify(payload||{})});
 
 function showView(name){
-  ['boot','login','budget'].forEach(id=>{$(id+'View').hidden=id!==name;});
+  ['login','budget'].forEach(id=>{$(id+'View').hidden=id!==name;});
 }
 function showLogin(message){
   showView('login');
   $('loginError').textContent=message||'';
   $('loginPass').value='';
 }
-function showBudget(){
+// bootBody — скелетон при первой загрузке; budgetBody — реальные данные. Показываем budgetBody,
+// когда данные уже пришли, чтобы не было второго экрана загрузки.
+function revealBudget(){
+  $('bootBody').hidden=true;
+  $('budgetBody').hidden=false;
+}
+function showBudget(keepLoader){
   showView('budget');
+  if(!keepLoader)revealBudget();
   Budget.open();
 }
 function onSessionExpired(){
@@ -477,23 +509,27 @@ $('logout').addEventListener('click',async()=>{
 });
 
 async function boot(){
-  showView('boot');
-  $('bootView').innerHTML=loadingContent('Загрузка…');
+  showView('budget');
+  $('bootBody').hidden=false;
+  $('budgetBody').hidden=true;
+  $('bootBody').innerHTML=loadingContent('Загрузка…');
   const wake=setTimeout(()=>{
-    const label=document.querySelector('#bootView .loader-text');
+    const label=document.querySelector('#bootBody .loader-text');
     if(label)label.textContent='Сервер просыпается, это может занять до минуты…';
   },6000);
   try{
     const {ok,data}=await api('/api/me');
     clearTimeout(wake);
-    if(ok&&data&&data.authenticated)showBudget();
+    if($('loginView').hidden===false)return;   // пока ждали, уже показали вход — не мешаем
+    if(ok&&data&&data.authenticated)showBudget(true);  // скелетон остаётся до загрузки данных
     else showLogin();
   }catch(err){
     clearTimeout(wake);
-    $('bootView').innerHTML='<section class="bd-card bd-error">Не удалось связаться с сервером<br><button class="bd-month-add" type="button" id="bootRetry">Повторить</button></section>';
+    if($('loginView').hidden===false)return;
+    $('bootBody').innerHTML='<section class="bd-card bd-error">Не удалось связаться с сервером<br><button class="bd-month-add" type="button" id="bootRetry">Повторить</button></section>';
   }
 }
-$('bootView').addEventListener('click',e=>{if(e.target.closest('#bootRetry'))boot();});
+$('bootBody').addEventListener('click',e=>{if(e.target.closest('#bootRetry'))boot();});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)Budget.refresh();});
 
 // ============================================================
@@ -705,7 +741,7 @@ async function load(spinner){
  if(spinner||!S.state){S.state=null;render();}
  // бесплатный сервер засыпает: первый запрос может идти долго, предупреждаем
  const wake=setTimeout(()=>{
-  const label=document.querySelector('#budgetBody .loader-wrap div:last-child');
+  const label=document.querySelector('#budgetBody .loader-text');
   if(!S.state&&label)label.textContent='Сервер просыпается, это может занять до минуты…';
  },6000);
  try{
@@ -713,9 +749,10 @@ async function load(spinner){
   if(seq!==S.seq)return;        // пока грузилось, пользователь уже что-то изменил — не затираем свежее
   adopt(data);
   render();
+  revealBudget();
  }catch(error){
   if(error&&error.status===401)return;
-  if(seq===S.seq&&!S.state){S.dragging=false;$('budgetBody').innerHTML=errorHtml(errText(error));}
+  if(seq===S.seq&&!S.state){S.dragging=false;revealBudget();$('budgetBody').innerHTML=errorHtml(errText(error));}
  }finally{
   clearTimeout(wake);
   S.loading=false;
