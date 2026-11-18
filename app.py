@@ -334,13 +334,17 @@ IDS_MAX = 300
 MAX_MONTHS_AHEAD = 24       # за один раз можно добавить не больше стольких месяцев вперёд
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
-# Лист корзины покупок: id, название, количество, цена за единицу, «куплено», «удалено».
+# Лист корзины покупок: id, название, количество, цена за единицу, «куплено»,
+# «удалено», единица измерения (шт/кг/г/л).
 BASKET_SHEET = "bascket"
-BASKET_HEADER = ["id", "name", "qty", "price", "bought", "delete_flg"]
+BASKET_HEADER = ["id", "name", "qty", "price", "bought", "delete_flg", "unit"]
 BASKET_COLUMNS = len(BASKET_HEADER)
-BASKET_LAST = "F"          # последняя колонка листа корзины (A:F)
+BASKET_LAST = "G"          # последняя колонка листа корзины (A:G)
 BOUGHT_COLUMN = "E"        # отметка «куплено»: 1 — да, пусто или 0 — нет
 BASKET_DELETE_COLUMN = "F" # мягкое удаление, как delete_flg в cost
+UNIT_COLUMN = "G"          # единица измерения количества
+UNIT_MAX = 10
+UNIT_DEFAULT = "шт"
 
 
 # ======================= Проверка входных данных =======================
@@ -432,6 +436,20 @@ def parse_qty(value):
     if number <= 0:
         raise BudgetError("Количество: укажи число больше 0")
     return number
+
+
+def parse_unit(value):
+    """Единица измерения (шт, кг, г, л…): короткий текст, по умолчанию «шт»."""
+    if value is None:
+        return UNIT_DEFAULT
+    if not isinstance(value, str):
+        raise BudgetError("Единица: нужен текст")
+    unit = " ".join(value.split())
+    if not unit:
+        return UNIT_DEFAULT
+    if len(unit) > UNIT_MAX:
+        raise BudgetError(f"Единица: не больше {UNIT_MAX} символов")
+    return unit
 
 
 def parse_request_id(value):
@@ -656,6 +674,7 @@ def parse_basket_rows(values):
             continue
         qty = _lenient_number(cells[2])
         price = _lenient_number(cells[3])
+        unit = " ".join(str(cells[6]).split()) or UNIT_DEFAULT
         rows.append({
             "row": number,
             "id": _row_id(cells[0]),
@@ -664,13 +683,16 @@ def parse_basket_rows(values):
             "price": max(0, price) if price is not None else 0,
             "bought": _truthy(cells[4]),
             "deleted": _truthy(cells[5]),
+            "unit": unit[:UNIT_MAX],
             "raw": cells,
         })
     return rows
 
 
 def build_basket(rows):
-    """Список корзины для приложения: порядок — как в таблице."""
+    """Список корзины для приложения: порядок — как в таблице.
+    deleted — названия мягко удалённых строк: в списке их нет, но они нужны
+    для подсказок названий, чтобы не предлагать уже существовавшие товары."""
     items = [
         {
             "id": row["id"],
@@ -678,10 +700,12 @@ def build_basket(rows):
             "qty": row["qty"],
             "price": row["price"],
             "bought": row["bought"],
+            "unit": row["unit"],
         }
         for row in rows if not row["deleted"] and row["name"]
     ]
-    return {"items": items}
+    deleted = [row["name"] for row in rows if row["deleted"] and row["name"]]
+    return {"items": items, "deleted": deleted}
 
 
 def find_period(state, pay_date):
@@ -1200,7 +1224,17 @@ class BudgetStore:
     def _ensure_basket_header(self, values):
         first = values[0] if values else []
         if first and str(first[0]).strip().lower() == "id":
-            return values                       # шапка уже есть
+            # шапка есть, но в старом листе могло не хватать колонок (например unit)
+            missing = [
+                (index, title) for index, title in enumerate(BASKET_HEADER)
+                if index >= len(first) or not str(first[index]).strip()
+            ]
+            if missing:
+                self._write([{
+                    "range": f"'{BASKET_SHEET}'!{chr(65 + index)}1",
+                    "values": [[title]]
+                } for index, title in missing])
+            return values
         if not any(str(cell).strip() for cell in first):
             self._write([{
                 "range": f"'{BASKET_SHEET}'!A1:{BASKET_LAST}1",
@@ -1259,15 +1293,16 @@ class BudgetStore:
             row["price"],
             1 if row["bought"] else 0,
             1 if row["deleted"] else 0,
+            row.get("unit", UNIT_DEFAULT),
         ]
 
     def read_basket(self):
         return self._load_basket()[1]
 
-    def basket_add(self, name, qty, price):
+    def basket_add(self, name, qty, price, unit):
         """Новый товар встаёт первым — сразу под шапкой, как свежие месяцы в cost."""
         sheet_id, rows, row_count = self._load_basket(write=True)
-        new_row = {"name": name, "qty": qty, "price": price,
+        new_row = {"name": name, "qty": qty, "price": price, "unit": unit,
                    "bought": False, "deleted": False}
         top = 0 if any(row["row"] == 1 for row in rows) else 1   # 1 — под шапкой
         self._insert_rows(
@@ -1276,13 +1311,19 @@ class BudgetStore:
         )
         return True
 
-    def basket_update(self, item_id, name, qty, price):
+    def basket_update(self, item_id, name, qty, price, unit):
         _, rows, _ = self._load_basket(write=True)
         row = self._active_basket_item(rows, item_id)
-        self._write([{
-            "range": f"'{BASKET_SHEET}'!B{row['row']}:D{row['row']}",
-            "values": [[name, qty, price]]
-        }])
+        self._write([
+            {
+                "range": f"'{BASKET_SHEET}'!B{row['row']}:D{row['row']}",
+                "values": [[name, qty, price]]
+            },
+            {
+                "range": f"'{BASKET_SHEET}'!{UNIT_COLUMN}{row['row']}",
+                "values": [[unit]]
+            },
+        ])
         return True
 
     def basket_set_qty(self, item_id, qty):
@@ -1553,7 +1594,8 @@ def basket_item_add():
             "basket_add",
             parse_name(data.get("name")),
             parse_qty(data.get("qty")),
-            parse_amount(data.get("price"), "Цена")
+            parse_amount(data.get("price"), "Цена"),
+            parse_unit(data.get("unit"))
         )
     return _basket_mutation(apply)
 
@@ -1567,7 +1609,8 @@ def basket_item_update():
             parse_item_id(data.get("id")),
             parse_name(data.get("name")),
             parse_qty(data.get("qty")),
-            parse_amount(data.get("price"), "Цена")
+            parse_amount(data.get("price"), "Цена"),
+            parse_unit(data.get("unit"))
         )
     return _basket_mutation(apply)
 
