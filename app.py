@@ -334,6 +334,14 @@ IDS_MAX = 300
 MAX_MONTHS_AHEAD = 24       # за один раз можно добавить не больше стольких месяцев вперёд
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
+# Лист корзины покупок: id, название, количество, цена за единицу, «куплено», «удалено».
+BASKET_SHEET = "bascket"
+BASKET_HEADER = ["id", "name", "qty", "price", "bought", "delete_flg"]
+BASKET_COLUMNS = len(BASKET_HEADER)
+BASKET_LAST = "F"          # последняя колонка листа корзины (A:F)
+BOUGHT_COLUMN = "E"        # отметка «куплено»: 1 — да, пусто или 0 — нет
+BASKET_DELETE_COLUMN = "F" # мягкое удаление, как delete_flg в cost
+
 
 # ======================= Проверка входных данных =======================
 def parse_amount(value, title="Сумма"):
@@ -416,6 +424,14 @@ def parse_scope(value):
     if value not in {"one", "future"}:
         raise BudgetError("Не выбран способ применения суммы")
     return value
+
+
+def parse_qty(value):
+    """Количество товара: положительное число, до копеек."""
+    number = parse_amount(value, "Количество")
+    if number <= 0:
+        raise BudgetError("Количество: укажи число больше 0")
+    return number
 
 
 def parse_request_id(value):
@@ -626,6 +642,48 @@ def build_state(rows):
     return {"periods": periods, "next_month": following}
 
 
+def parse_basket_rows(values):
+    """Строки листа корзины. Шапка и строки без названия пропускаются.
+    qty по умолчанию 1, price — 0 (товар может быть без цены)."""
+    rows = []
+    for number, raw in enumerate(values, start=1):
+        cells = list(raw)[:BASKET_COLUMNS]
+        cells += [""] * (BASKET_COLUMNS - len(cells))
+        if number == 1 and str(cells[0]).strip().lower() == "id":
+            continue                                # шапка
+        name = " ".join(str(cells[1]).split())
+        if not name:
+            continue
+        qty = _lenient_number(cells[2])
+        price = _lenient_number(cells[3])
+        rows.append({
+            "row": number,
+            "id": _row_id(cells[0]),
+            "name": name,
+            "qty": qty if qty is not None and qty > 0 else 1,
+            "price": max(0, price) if price is not None else 0,
+            "bought": _truthy(cells[4]),
+            "deleted": _truthy(cells[5]),
+            "raw": cells,
+        })
+    return rows
+
+
+def build_basket(rows):
+    """Список корзины для приложения: порядок — как в таблице."""
+    items = [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "qty": row["qty"],
+            "price": row["price"],
+            "bought": row["bought"],
+        }
+        for row in rows if not row["deleted"] and row["name"]
+    ]
+    return {"items": items}
+
+
 def find_period(state, pay_date):
     for period in state["periods"]:
         if period["pay_date"] == pay_date.isoformat():
@@ -795,28 +853,28 @@ class BudgetStore:
     def __init__(self, store):
         self.store = store
         self._header_ready = False
+        self._basket_header_ready = False
 
     # ---------- низкий уровень ----------
     def _values(self):
         return self.store.client.spreadsheets().values()
 
-    def _sheet_id(self, create):
+    def _sheet_id(self, create, sheet=BUDGET_SHEET, header=BUDGET_HEADER,
+                  columns=BUDGET_COLUMNS):
         ids = self.store._get_sheet_ids()
-        if BUDGET_SHEET not in ids:
+        if sheet not in ids:
             self.store._sheet_ids = None        # лист могли добавить вручную
             ids = self.store._get_sheet_ids()
-        if BUDGET_SHEET in ids:
-            return ids[BUDGET_SHEET]
+        if sheet in ids:
+            return ids[sheet]
         if not create:
             return None
-        return self.store._ensure_sheet(
-            BUDGET_SHEET, BUDGET_HEADER, rows=1000, columns=BUDGET_COLUMNS
-        )
+        return self.store._ensure_sheet(sheet, header, rows=1000, columns=columns)
 
-    def _read_values(self):
+    def _read_values(self, sheet=BUDGET_SHEET, last=LAST_COLUMN):
         response = self._values().get(
             spreadsheetId=self.store.spreadsheet_id,
-            range=f"'{BUDGET_SHEET}'!A:{LAST_COLUMN}",
+            range=f"'{sheet}'!A:{last}",
             valueRenderOption="UNFORMATTED_VALUE"
         ).execute(num_retries=3)
         return response.get("values", [])
@@ -830,9 +888,9 @@ class BudgetStore:
             body={"valueInputOption": "RAW", "data": data}
         ).execute(num_retries=3)
 
-    def _ensure_columns(self, sheet_id):
-        """В листе должно хватать столбцов под все колонки записи (старый лист мог быть шире 8,
-        но не шире 9): при нехватке столбцы добавляются справа."""
+    def _ensure_columns(self, sheet_id, columns=BUDGET_COLUMNS):
+        """В листе должно хватать столбцов под все колонки записи: при нехватке
+        столбцы добавляются справа."""
         response = self.store.client.spreadsheets().get(
             spreadsheetId=self.store.spreadsheet_id,
             fields="sheets.properties(sheetId,gridProperties.columnCount)"
@@ -842,14 +900,14 @@ class BudgetStore:
             if props.get("sheetId") != sheet_id:
                 continue
             have = props.get("gridProperties", {}).get("columnCount", 0)
-            if have and have < BUDGET_COLUMNS:
+            if have and have < columns:
                 self.store.client.spreadsheets().batchUpdate(
                     spreadsheetId=self.store.spreadsheet_id,
                     body={"requests": [{
                         "appendDimension": {
                             "sheetId": sheet_id,
                             "dimension": "COLUMNS",
-                            "length": BUDGET_COLUMNS - have
+                            "length": columns - have
                         }
                     }]}
                 ).execute(num_retries=3)
@@ -932,11 +990,12 @@ class BudgetStore:
         self._repair_dates(sheet_id, rows)
         return sheet_id, rows, len(values)
 
-    def _insert_rows(self, sheet_id, at, row_count, value_rows, inherit_before):
+    def _insert_rows(self, sheet_id, at, row_count, value_rows, inherit_before,
+                     date_col=1):
         """Вставляет строки с индексом at (с нуля). Формат берётся у строки выше
         (inherit_before=True) или у той, что окажется под вставкой (False).
         Если под местом вставки данных нет — дописывает в конец. Дата пишется числом,
-        её вид задаёт формат ячейки."""
+        её вид задаёт формат ячейки (date_col — номер колонки даты, None — без формата)."""
         rows = [{"values": [_cell(value) for value in value_row]} for value_row in value_rows]
         if at >= row_count:
             first_index = row_count
@@ -965,16 +1024,18 @@ class BudgetStore:
                     }
                 }
             ]
-        requests.append({
-            "updateCells": {
-                "start": {"sheetId": sheet_id, "rowIndex": first_index, "columnIndex": 1},
-                "rows": [
-                    {"values": [{"userEnteredFormat": {"numberFormat": DATE_FORMAT}}]}
-                    for _ in value_rows
-                ],
-                "fields": "userEnteredFormat.numberFormat"
-            }
-        })
+        if date_col is not None:
+            requests.append({
+                "updateCells": {
+                    "start": {"sheetId": sheet_id, "rowIndex": first_index,
+                              "columnIndex": date_col},
+                    "rows": [
+                        {"values": [{"userEnteredFormat": {"numberFormat": DATE_FORMAT}}]}
+                        for _ in value_rows
+                    ],
+                    "fields": "userEnteredFormat.numberFormat"
+                }
+            })
         self.store.client.spreadsheets().batchUpdate(
             spreadsheetId=self.store.spreadsheet_id,
             body={"requests": requests}
@@ -1134,6 +1195,141 @@ class BudgetStore:
             for slot, item_id in zip(items, ids)
         ])
         return pay_date.isoformat()
+
+    # ---------- корзина (лист bascket) ----------
+    def _ensure_basket_header(self, values):
+        first = values[0] if values else []
+        if first and str(first[0]).strip().lower() == "id":
+            return values                       # шапка уже есть
+        if not any(str(cell).strip() for cell in first):
+            self._write([{
+                "range": f"'{BASKET_SHEET}'!A1:{BASKET_LAST}1",
+                "values": [BASKET_HEADER]
+            }])
+            return [list(BASKET_HEADER)] + values[1:]
+        return values                           # в первой строке уже данные — не трогаем
+
+    def _repair_basket_ids(self, rows):
+        """Строки без id или с повтором получают новый id (как в листе cost)."""
+        seen, broken = set(), []
+        for row in rows:
+            if row["id"] is None or row["id"] in seen:
+                broken.append(row)
+            else:
+                seen.add(row["id"])
+        if not broken:
+            return
+        next_id = max(seen, default=0) + 1
+        data = []
+        for row in broken:
+            row["id"] = next_id
+            row["raw"][0] = next_id
+            data.append({"range": f"'{BASKET_SHEET}'!A{row['row']}", "values": [[next_id]]})
+            next_id += 1
+        self._write(data)
+
+    def _load_basket(self, create=False, write=False):
+        sheet_id = self._sheet_id(
+            create, BASKET_SHEET, BASKET_HEADER, BASKET_COLUMNS
+        )
+        if sheet_id is None:
+            return None, [], 0
+        values = self._read_values(BASKET_SHEET, BASKET_LAST)
+        if (create or write) and not self._basket_header_ready:
+            self._ensure_columns(sheet_id, BASKET_COLUMNS)
+            values = self._ensure_basket_header(values)
+            self._basket_header_ready = True
+        rows = parse_basket_rows(values)
+        self._repair_basket_ids(rows)
+        return sheet_id, rows, len(values)
+
+    @staticmethod
+    def _active_basket_item(rows, item_id):
+        for row in rows:
+            if row["id"] == item_id and not row["deleted"] and row["name"]:
+                return row
+        raise BudgetError("Товар не найден. Обнови страницу.", 404)
+
+    @staticmethod
+    def _basket_values(row_id, row):
+        return [
+            row_id,
+            row["name"],
+            row["qty"],
+            row["price"],
+            1 if row["bought"] else 0,
+            1 if row["deleted"] else 0,
+        ]
+
+    def read_basket(self):
+        return self._load_basket()[1]
+
+    def basket_add(self, name, qty, price):
+        """Новый товар дописывается в конец листа."""
+        sheet_id, rows, row_count = self._load_basket(write=True)
+        new_row = {"name": name, "qty": qty, "price": price,
+                   "bought": False, "deleted": False}
+        self._insert_rows(
+            sheet_id, row_count, row_count,
+            [self._basket_values(_next_id(rows), new_row)], True, date_col=None
+        )
+        return True
+
+    def basket_update(self, item_id, name, qty, price):
+        _, rows, _ = self._load_basket(write=True)
+        row = self._active_basket_item(rows, item_id)
+        self._write([{
+            "range": f"'{BASKET_SHEET}'!B{row['row']}:D{row['row']}",
+            "values": [[name, qty, price]]
+        }])
+        return True
+
+    def basket_set_qty(self, item_id, qty):
+        _, rows, _ = self._load_basket(write=True)
+        row = self._active_basket_item(rows, item_id)
+        self._write([{
+            "range": f"'{BASKET_SHEET}'!C{row['row']}", "values": [[qty]]
+        }])
+        return True
+
+    def basket_set_bought(self, item_id, bought):
+        _, rows, _ = self._load_basket(write=True)
+        row = self._active_basket_item(rows, item_id)
+        self._write([{
+            "range": f"'{BASKET_SHEET}'!{BOUGHT_COLUMN}{row['row']}",
+            "values": [[1 if bought else 0]]
+        }])
+        return True
+
+    def basket_delete(self, item_id):
+        """Мягкое удаление: delete_flg = 1, строка остаётся в таблице."""
+        _, rows, _ = self._load_basket(write=True)
+        row = self._active_basket_item(rows, item_id)
+        self._write([{
+            "range": f"'{BASKET_SHEET}'!{BASKET_DELETE_COLUMN}{row['row']}",
+            "values": [[1]]
+        }])
+        return True
+
+    def basket_reorder(self, ids):
+        """Новый порядок товаров. Как и в cost: строки остаются на своих местах
+        таблицы, внутри них меняется только очерёдность записей."""
+        _, rows, _ = self._load_basket(write=True)
+        items = [row for row in rows if not row["deleted"] and row["name"]]
+        by_id = {row["id"]: row for row in items}
+        if len(set(ids)) != len(ids) or set(ids) != set(by_id):
+            raise BudgetError("Список покупок изменился. Обнови страницу и повтори.", 409)
+        items.sort(key=lambda row: row["row"])
+        if [row["id"] for row in items] == ids:
+            return True
+        self._write([
+            {
+                "range": f"'{BASKET_SHEET}'!A{slot['row']}:{BASKET_LAST}{slot['row']}",
+                "values": [list(by_id[item_id]["raw"])]
+            }
+            for slot, item_id in zip(items, ids)
+        ])
+        return True
 
 
 # ======================= API бюджета =======================
@@ -1318,6 +1514,100 @@ def budget_reorder():
             parse_ids(data.get("ids"))
         )
     return _budget_mutation(apply)
+
+
+# ======================= API корзины =======================
+def _basket_response(extra=None):
+    data = build_basket(_store_call("read_basket"))
+    if extra:
+        data.update(extra)
+    return jsonify({"ok": True, "data": data})
+
+
+def _basket_mutation(apply):
+    """Изменение корзины + свежий список в ответе. request_id защищает от повторов."""
+    data = _request_data()
+    request_id = parse_request_id(data.get("request_id"))
+    if not _claim_request(request_id):
+        return _basket_response({"duplicate": True})
+    try:
+        apply(data)
+    except Exception:
+        _release_request(request_id)
+        raise
+    return _basket_response()
+
+
+@app.route("/api/basket/items", methods=["GET", "OPTIONS"])
+@_login_required
+def basket_items():
+    return _basket_response()
+
+
+@app.route("/api/basket/item/add", methods=["POST", "OPTIONS"])
+@_login_required
+def basket_item_add():
+    def apply(data):
+        return _store_call(
+            "basket_add",
+            parse_name(data.get("name")),
+            parse_qty(data.get("qty")),
+            parse_amount(data.get("price"), "Цена")
+        )
+    return _basket_mutation(apply)
+
+
+@app.route("/api/basket/item/update", methods=["POST", "OPTIONS"])
+@_login_required
+def basket_item_update():
+    def apply(data):
+        return _store_call(
+            "basket_update",
+            parse_item_id(data.get("id")),
+            parse_name(data.get("name")),
+            parse_qty(data.get("qty")),
+            parse_amount(data.get("price"), "Цена")
+        )
+    return _basket_mutation(apply)
+
+
+@app.route("/api/basket/item/qty", methods=["POST", "OPTIONS"])
+@_login_required
+def basket_item_qty():
+    def apply(data):
+        return _store_call(
+            "basket_set_qty",
+            parse_item_id(data.get("id")),
+            parse_qty(data.get("qty"))
+        )
+    return _basket_mutation(apply)
+
+
+@app.route("/api/basket/item/bought", methods=["POST", "OPTIONS"])
+@_login_required
+def basket_item_bought():
+    def apply(data):
+        bought = data.get("bought")
+        if not isinstance(bought, bool):
+            raise BudgetError("Отметка «куплено»: нужно true или false")
+        return _store_call("basket_set_bought", parse_item_id(data.get("id")), bought)
+    return _basket_mutation(apply)
+
+
+@app.route("/api/basket/item/delete", methods=["POST", "OPTIONS"])
+@_login_required
+def basket_item_delete():
+    def apply(data):
+        return _store_call("basket_delete", parse_item_id(data.get("id")))
+    return _basket_mutation(apply)
+
+
+@app.route("/api/basket/reorder", methods=["POST", "OPTIONS"])
+@_login_required
+def basket_reorder():
+    def apply(data):
+        return _store_call("basket_reorder", parse_ids(data.get("ids")))
+    return _basket_mutation(apply)
 
 
 @app.errorhandler(BudgetError)
