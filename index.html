@@ -364,6 +364,13 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
 .bk-sum{flex:none;max-width:36%;font-size:16px;font-weight:800;letter-spacing:-.3px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bk-bought-label{padding:12px 16px 4px;font-size:11.5px;font-weight:750;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
 .bd-row.noprice .bk-sum{color:#e5484d}
+.bk-suggest{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 14px}
+.bk-suggest:empty{display:none}
+.bk-sug{border:1.5px solid rgba(32,169,155,.5);background:rgba(32,169,155,.12);color:var(--text);font:inherit;font-size:15px;font-weight:600;padding:8px 14px;border-radius:999px;cursor:pointer;-webkit-tap-highlight-color:transparent;animation:bkSugIn .28s cubic-bezier(.22,1,.36,1) both;animation-delay:calc(var(--i,0)*24ms)}
+.bk-sug b{font-weight:850;color:#13867a;background:rgba(32,169,155,.2);border-radius:5px;padding:0 1px}
+:root[data-theme="dark"] .bk-sug b{color:#7cf0de;background:rgba(69,224,203,.2)}
+.bk-sug:active{transform:scale(.94)}
+@keyframes bkSugIn{from{opacity:0;transform:translateY(6px) scale(.96)}to{opacity:1;transform:none}}
 .bk-total{position:sticky;bottom:calc(78px + env(safe-area-inset-bottom));z-index:5;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding:13px 16px;border-radius:18px;background:var(--card-grad);border:1px solid var(--card-border);box-shadow:var(--shadow)}
 .bk-total>div{display:flex;flex-direction:column;gap:1px;min-width:0}
 .bk-total>div>span{font-size:14px;font-weight:700;color:var(--muted)}
@@ -1069,6 +1076,15 @@ function formatMoneyInput(el){
 }
 $('bdFormBody').addEventListener('input',e=>{
  if(e.target.matches('input[inputmode="decimal"]'))formatMoneyInput(e.target);
+ if(e.target.id==='bkName')renderBkSuggest();
+});
+$('bdFormBody').addEventListener('click',e=>{
+ const b=e.target.closest('.bk-sug');
+ if(!b)return;
+ const item=bkSugList[Number(b.dataset.i)];
+ const input=$('bkName');
+ if(item&&input){input.value=item.name;input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();}
+ selectionHaptic();
 });
 
 // ---------- отметка «выполнено» ----------
@@ -1295,7 +1311,7 @@ host.addEventListener('click',e=>{
 });
 
 // ---------- корзина покупок (лист bascket) ----------
-const B={items:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false};
+const B={items:null,deleted:[],busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false};
 const basketHost=$('basketBody');
 const qtyText=q=>Number.isInteger(q)?String(q):String(Math.round(q*100)/100);
 const basketItems=()=>B.items||[];
@@ -1305,9 +1321,11 @@ const basketSum=list=>r2(list.reduce((a,x)=>a+x.qty*x.price,0));
 function basketRowHtml(it){
  const bought=it.bought;
  const noprice=it.price<=0;
+ const unit=it.unit||'шт';
+ const step=unit!=='шт'?0.1:1;
  return '<div class="bd-row'+(bought?' done':'')+(noprice?' noprice':'')+'" data-id="'+it.id+'">'
-  +'<div class="bk-info"><div class="bd-title"><b>'+esc(it.name)+'</b></div><span class="bk-sub">'+esc(qtyText(it.qty)+' × '+money(it.price))+'</span></div>'
-  +'<div class="bk-qty"><button class="bk-q" type="button" data-act="bq-dec" data-id="'+it.id+'"'+(it.qty<=1?' disabled':'')+' aria-label="Меньше: '+esc(it.name)+'">−</button><span class="bk-qn">'+esc(qtyText(it.qty))+'</span><button class="bk-q" type="button" data-act="bq-inc" data-id="'+it.id+'" aria-label="Больше: '+esc(it.name)+'">+</button></div>'
+  +'<div class="bk-info"><div class="bd-title"><b>'+esc(it.name)+'</b></div><span class="bk-sub">'+esc(qtyText(it.qty)+' '+unit+' × '+money(it.price))+'</span></div>'
+  +'<div class="bk-qty"><button class="bk-q" type="button" data-act="bq-dec" data-id="'+it.id+'"'+(it.qty<=step?' disabled':'')+' aria-label="Меньше: '+esc(it.name)+'">−</button><span class="bk-qn">'+esc(qtyText(it.qty))+'</span><button class="bk-q" type="button" data-act="bq-inc" data-id="'+it.id+'" aria-label="Больше: '+esc(it.name)+'">+</button></div>'
   +'<div class="bk-sum">'+money(r2(it.qty*it.price))+'</div>'
   +'<button class="bd-check" type="button" data-act="bbought" data-id="'+it.id+'" role="checkbox" aria-checked="'+(bought?'true':'false')+'" aria-label="Куплено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
 }
@@ -1331,6 +1349,7 @@ function renderBasket(){
  body.innerHTML=basketBodyHtml();
  if(Math.abs(window.scrollY-y)>1)window.scrollTo(0,y);
 }
+function bkAdopt(data){B.items=data.items||[];B.deleted=data.deleted||[];}
 async function basketLoad(){
  if(B.loading||B.busy||B.dragging)return;
  B.loading=true;
@@ -1343,7 +1362,7 @@ async function basketLoad(){
  try{
   const data=await get('/api/basket/items');
   if(seq!==B.seq)return;
-  B.items=data.items||[];
+  bkAdopt(data);
   renderBasket();
  }catch(error){
   if(error&&error.status===401)return;
@@ -1359,11 +1378,12 @@ function bcall(path,extra){
 }
 // Быстрые изменения без формы (количество, «куплено»): сначала экран, потом сервер, по очереди.
 let basketChain=Promise.resolve();
-function basketQty(id,delta){
+function basketQty(id,dir){
  if(B.busy||B.dragging||!B.items)return;
  const it=B.items.find(x=>x.id===id);
  if(!it)return;
- const q=r2(it.qty+delta);
+ const step=(it.unit&&it.unit!=='шт')?0.1:1;
+ const q=r2(it.qty+dir*step);
  if(q<=0)return;                     // точные значения (в т.ч. дробные) — через окно товара
  it.qty=q;
  renderBasket();
@@ -1372,7 +1392,7 @@ function basketQty(id,delta){
  basketChain=basketChain.then(async()=>{
   try{
    const data=await bcall('item/qty',{id,qty});
-   B.items=data.items||[];
+   bkAdopt(data);
    renderBasket();
   }catch(error){
    alertError(error);
@@ -1391,7 +1411,7 @@ function basketBought(id){
  basketChain=basketChain.then(async()=>{
   try{
    const data=await bcall('item/bought',{id,bought:next});
-   B.items=data.items||[];
+   bkAdopt(data);
    renderBasket();
   }catch(error){
    alertError(error);
@@ -1401,10 +1421,12 @@ function basketBought(id){
 }
 // ---------- форма товара ----------
 function basketFields(it){
- const names=[...new Set(basketItems().map(x=>x.name))];
- const suggestions=names.length?'<datalist id="bkNames">'+names.map(n=>'<option value="'+esc(n)+'"></option>').join('')+'</datalist>':'';
- return '<label class="field"><span>Название</span><input class="value-input bd-left" id="bkName" list="bkNames" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" placeholder="Название" value="'+esc(it?it.name:'')+'"></label>'+suggestions
+ const unit0=(it&&it.unit)||'шт';
+ const units=['шт','кг','г','л'].map(u=>'<button type="button" data-v="'+u+'" class="'+(unit0===u?'on':'')+'">'+u+'</button>').join('');
+ return '<label class="field"><span>Название</span><input class="value-input bd-left" id="bkName" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" placeholder="Название" value="'+esc(it?it.name:'')+'"></label>'
+  +'<div class="bk-suggest" id="bkSug" aria-live="polite"></div>'
   +'<label class="field"><span>Количество</span><input class="value-input" id="bkQty" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="1" value="'+(it?qtyText(it.qty):'1')+'"></label>'
+  +'<div class="field"><span>Единица</span><div class="bd-seg" id="bkUnit">'+units+'</div></div>'
   +'<label class="field"><span>Цена за единицу, ₽</span><input class="value-input" id="bkPrice" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.price):'')+'"></label>';
 }
 function readBasketForm(){
@@ -1416,12 +1438,64 @@ function readBasketForm(){
  const priceRaw=$('bkPrice').value.trim();
  const pr=priceRaw===''?{value:0}:parseMoney(priceRaw,'Цена');
  if(pr.error){formError(pr.error);return null;}
- return {name,qty:q.value,price:pr.value};
+ const unit=$('bkUnit').querySelector('.on').dataset.v;
+ return {name,qty:q.value,price:pr.value,unit};
 }
+// ---------- подсказки названий (как поиск блюд в примере) ----------
+const bkFold=t=>String(t||'').toLowerCase().replace(/ё/g,'е');
+const bkTokens=t=>bkFold(t).match(/[a-zа-я0-9]+/g)||[];
+function bkMatch(tokens,name){
+ const folded=bkFold(name),words=[];
+ const re=/[a-zа-я0-9]+/g;let m;
+ while((m=re.exec(folded)))words.push({w:m[0],start:m.index});
+ const used=new Set(),marks=[];let score=0;
+ for(const tok of tokens){
+  let best=-1,bs=0,ba=0;
+  words.forEach((word,i)=>{
+   if(used.has(i))return;
+   let v=0,at=word.start;
+   if(word.w===tok)v=4;
+   else if(word.w.startsWith(tok))v=3;
+   else if(tok.length>=3&&word.w.includes(tok)){v=1;at=word.start+word.w.indexOf(tok);}
+   if(v>bs){best=i;bs=v;ba=at;}
+  });
+  if(best<0)return null;
+  used.add(best);score+=bs;marks.push([ba,ba+tok.length]);
+ }
+ return {score,marks};
+}
+function bkHighlight(text,marks){
+ const sorted=marks.slice().sort((a,b)=>a[0]-b[0]);
+ let html='',pos=0;
+ sorted.forEach(([from,to])=>{
+  if(from<pos)from=pos;
+  if(to<=from)return;
+  html+=esc(text.slice(pos,from))+'<b>'+esc(text.slice(from,to))+'</b>';
+  pos=to;
+ });
+ return html+esc(text.slice(pos));
+}
+let bkSugList=[];
+function renderBkSuggest(){
+ const box=$('bkSug');
+ if(!box)return;
+ const input=$('bkName');
+ const tokens=input?bkTokens(input.value):[];
+ if(!tokens.length||basketItems().some(x=>x.name===String(input.value).trim())){bkSugList=[];box.innerHTML='';return;}
+ const found=[];
+ bkNames().forEach(name=>{
+  const mt=bkMatch(tokens,name);
+  if(mt)found.push({name,score:mt.score,marks:mt.marks});
+ });
+ found.sort((a,b)=>b.score-a.score);
+ bkSugList=found.slice(0,6);
+ box.innerHTML=bkSugList.map((s,i)=>'<button class="bk-sug" type="button" data-i="'+i+'" style="--i:'+i+'">'+bkHighlight(s.name,s.marks)+'</button>').join('');
+}
+const bkNames=()=>[...new Set([...basketItems().map(x=>x.name),...B.deleted])];
 async function basketCommit(action,extra){
  const data=await bcall(action,extra);
  B.seq++;
- B.items=data.items||[];
+ bkAdopt(data);
  renderBasket();
  uiHaptic('success');
 }
@@ -1436,6 +1510,7 @@ function openBasketAdd(){
    return true;
   }
  });
+ renderBkSuggest();
 }
 function openBasketEdit(id){
  const it=B.items&&B.items.find(x=>x.id===id);
@@ -1445,7 +1520,7 @@ function openBasketEdit(id){
   onSave:async()=>{
    const v=readBasketForm();
    if(!v)return false;
-   if(v.name===it.name&&v.qty===it.qty&&v.price===it.price)return true;
+   if(v.name===it.name&&v.qty===it.qty&&v.price===it.price&&v.unit===(it.unit||'шт'))return true;
    await basketCommit('item/update',{id:it.id,...v});
    return true;
   },
@@ -1457,6 +1532,7 @@ function openBasketEdit(id){
    return true;
   }}]
  });
+ renderBkSuggest();
 }
 async function basketCommitOrder(list,ids){
  // Перетаскивание внутри одной группы: купленные всегда внизу, поэтому порядок
@@ -1474,7 +1550,7 @@ async function basketCommitOrder(list,ids){
  try{
   const data=await bcall('reorder',{ids:order});
   B.seq++;
-  B.items=data.items||[];
+  bkAdopt(data);
   B.busy=false;
   renderBasket();
   uiHaptic('success');
@@ -1681,7 +1757,7 @@ window.Budget={
   $('budgetFormBackdrop').classList.remove('visible');
   if(asking)closeSheet(null);
   $('budgetBody').innerHTML='';
-  B.items=null;B.busy=false;B.loading=false;B.dragging=false;B.pendingRender=false;B.noClick=false;
+  B.items=null;B.deleted=[];B.busy=false;B.loading=false;B.dragging=false;B.pendingRender=false;B.noClick=false;
   $('basketBody').innerHTML='';
  }
 };
