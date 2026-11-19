@@ -988,6 +988,8 @@ function showForm(cfg){
  $('bdFormIcon').textContent=cfg.icon;
  $('bdFormTitle').textContent=cfg.title;
  $('bdFormBody').innerHTML=cfg.html;
+ // браузер может сам подставить старые значения в поля с теми же id — сбрасываем к атрибутам
+ $('bdFormBody').querySelectorAll('input').forEach(i=>{i.value=i.defaultValue;});
  $('bdFormLinks').innerHTML=cfg.links?cfg.links.map(l=>'<button class="bd-link'+(l.danger?' danger':'')+'" type="button" data-fa="'+l.id+'">'+l.text+'</button>').join(''):'';
  form.label=cfg.saveLabel||'Сохранить';
  $('bdFormSave').textContent=form.label;
