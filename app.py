@@ -317,13 +317,14 @@ def logout():
 BUDGET_SHEET = "cost"
 BUDGET_HEADER = [
     "id", "pay_date", "salary", "item_name", "permanent", "amount", "delete_flg",
-    "extra_income", "done_flg", "zero_flg"
+    "extra_income", "done_flg", "zero_flg", "level"
 ]
 BUDGET_COLUMNS = len(BUDGET_HEADER)
-LAST_COLUMN = "J"           # последняя колонка листа (вся строка записи — A:J)
+LAST_COLUMN = "K"           # последняя колонка листа (вся строка записи — A:K)
 EXTRA_COLUMN = "H"          # доп. заработок
 DONE_COLUMN = "I"           # отметка «статья выполнена»: 1 — да, пусто или 0 — нет
 ZERO_COLUMN = "J"           # «обнулить только на эту зарплату»: 1 — да, 0 — нет
+LEVEL_COLUMN = "K"          # вложенность: 1 — статья, 2 — подстатья внутри статьи выше
 DATE_FORMAT = {"type": "DATE", "pattern": "dd.MM.yyyy"}
 SHEETS_EPOCH = date(1899, 12, 30)
 PAY_DAYS = (3, 17)          # две зарплаты в месяц
@@ -585,6 +586,7 @@ def parse_rows(values):
         if pay_date is None:
             continue
         amount = _lenient_number(cells[5])
+        level = _lenient_number(cells[10])
         rows.append({
             "row": number,
             "id": _row_id(cells[0]),
@@ -597,6 +599,7 @@ def parse_rows(values):
             "extra": _lenient_number(cells[7]),
             "done": _truthy(cells[8]),
             "zeroed": _truthy(cells[9]),
+            "level": 2 if level == 2 else 1,
             "raw": cells,
         })
     return rows
@@ -630,18 +633,40 @@ def build_state(rows):
         salary = _period_salary(group)
         extra = _period_extra(group)
         income = _tidy(salary + extra)
-        items = [
-            {
+        # Иерархия: подстатья (level 2) принадлежит ближайшей статье выше
+        # в том же периоде. Сирота без родителя считается обычной статьёй.
+        items = []
+        parent_id = None
+        for row in group:
+            if not row["name"]:
+                continue
+            level = row.get("level", 1)
+            if level == 2 and parent_id is None:
+                level = 1
+            items.append({
                 "id": row["id"],
                 "name": row["name"],
                 "permanent": row["permanent"],
                 "amount": 0 if row["zeroed"] else row["amount"],
                 "was": row["amount"] if row["zeroed"] and row["amount"] else None,
                 "done": row["done"],
-            }
-            for row in group if row["name"]
-        ]
-        expenses = _tidy(sum(item["amount"] for item in items))
+                "level": level,
+                "parent": parent_id if level == 2 else None,
+            })
+            if level == 1:
+                parent_id = row["id"]
+        # у статьи с подстатьями сумма — сумма подстатей (своя ячейка суммы не учитывается)
+        child_totals = {}
+        for item in items:
+            if item["level"] == 2:
+                key = item["parent"]
+                child_totals[key] = _tidy(child_totals.get(key, 0) + item["amount"])
+        for item in items:
+            if item["id"] in child_totals:
+                item["amount"] = child_totals[item["id"]]
+                item["was"] = None
+        # в расходы идут только статьи: подстатьи уже учтены в сумме родителя
+        expenses = _tidy(sum(item["amount"] for item in items if item["level"] == 1))
         periods.append({
             "pay_date": day.isoformat(),
             "month": mkey,
@@ -716,11 +741,11 @@ def find_period(state, pay_date):
 
 
 # ======================= Создание нового месяца =======================
-def _new_row(day, salary, name="", permanent=False, amount=0, extra=0, done=False):
+def _new_row(day, salary, name="", permanent=False, amount=0, extra=0, done=False, level=1):
     return {
         "date": day, "salary": salary, "name": name,
         "permanent": permanent, "amount": amount, "extra": extra, "done": done,
-        "zeroed": False
+        "zeroed": False, "level": level
     }
 
 
@@ -740,11 +765,27 @@ def _budget_pay_dates(year, month):
 
 def _copy_period(day, source):
     """Строки нового периода: копируются только постоянные статьи (включая сумму 0)
-    и зарплата исходного периода."""
+    и зарплата исходного периода. Подстатьи (level 2) едут блоком вместе со своей
+    статьёй — отдельного флага постоянства у них нет."""
     salary = _period_salary(source)
-    copied = [row for row in source if row["name"] and row["permanent"]]
+    rows = sorted(
+        (row for row in source if row["name"]), key=lambda row: row.get("row", 0)
+    )
+    copied = []
+    index = 0
+    while index < len(rows):
+        row = rows[index]
+        index += 1
+        if not (row["permanent"] and row.get("level",1) <= 1):
+            continue
+        block = [row]
+        while index < len(rows) and rows[index].get("level",1) == 2:
+            block.append(rows[index])
+            index += 1
+        copied.extend(block)
     return [
-        _new_row(day, salary, row["name"], True, row["amount"]) for row in copied
+        _new_row(day, salary, row["name"], True, row["amount"], level=row.get("level",1))
+        for row in copied
     ] or [_new_row(day, salary)]
 
 
@@ -861,6 +902,7 @@ def _values_for_sheet(row_id, row):
         row.get("extra", 0),
         1 if row.get("done") else 0,
         1 if row.get("zeroed") else 0,
+        row.get("level", 1),
     ]
 
 
@@ -1103,29 +1145,63 @@ class BudgetStore:
         self._insert_rows(sheet_id, top, row_count, value_rows, False)
         return {"focus": focus.isoformat()}
 
-    def add_item(self, pay_date, name, amount, permanent):
+    def add_item(self, pay_date, name, amount, permanent, parent_id=None):
         sheet_id, rows, row_count = self._load(write=True)
         group = self._active_period(rows, pay_date)
         salary = _period_salary(group)
+        level = 1
+        parent = None
+        if parent_id is not None:
+            parent = self._active_item(rows, parent_id)
+            if parent["date"] != pay_date or parent.get("level",1) != 1:
+                raise BudgetError("Подстатью можно добавить только к статье этого периода", 400)
+            permanent = parent["permanent"]      # флаг постоянства — у блока в целом
+            level = 2
         if not any(row["name"] for row in group):
             anchor = group[0]                 # у периода не было статей — занимаем якорь
             self._write([{
                 "range": f"'{BUDGET_SHEET}'!D{anchor['row']}:F{anchor['row']}",
                 "values": [[name, YES if permanent else NO, amount]]
             }])
+            self._write([{
+                "range": f"'{BUDGET_SHEET}'!{LEVEL_COLUMN}{anchor['row']}", "values": [[level]]
+            }])
             return pay_date.isoformat()
-        last_row = max(row["row"] for row in rows if row["date"] == pay_date)
-        new_row = _new_row(pay_date, salary, name, permanent, amount, _period_extra(group))
+        if parent is None:
+            last_row = max(row["row"] for row in rows if row["date"] == pay_date)
+        else:
+            # подстатья встаёт в конец блока родителя — сразу после его подстатей
+            period_rows = sorted(
+                (row for row in rows if row["date"] == pay_date and not row["deleted"]),
+                key=lambda row: row["row"]
+            )
+            last_row = parent["row"]
+            seen = False
+            for row in period_rows:
+                if row["row"] == parent["row"]:
+                    seen = True
+                    continue
+                if not seen:
+                    continue
+                if row.get("level",1) == 2 and row["name"] and not row["deleted"]:
+                    last_row = row["row"]
+                elif row.get("level",1) <= 1:
+                    break
+        new_row = _new_row(
+            pay_date, salary, name, permanent, amount, _period_extra(group), level=level
+        )
         self._insert_after(sheet_id, last_row, row_count, _values_for_sheet(_next_id(rows), new_row))
         return pay_date.isoformat()
 
     def update_item(self, item_id, name, amount, permanent):
         _, rows, _ = self._load(write=True)
         row = self._active_item(rows, item_id)
-        data = [{
-            "range": f"'{BUDGET_SHEET}'!D{row['row']}:E{row['row']}",
-            "values": [[name, YES if permanent else NO]]
-        }]
+        data = [{"range": f"'{BUDGET_SHEET}'!D{row['row']}", "values": [[name]]}]
+        if permanent is not None:
+            data.append({
+                "range": f"'{BUDGET_SHEET}'!E{row['row']}",
+                "values": [[YES if permanent else NO]]
+            })
         if amount == 0 and row["amount"]:
             # обнуление только на эту зарплату: настоящая сумма в таблице остаётся,
             # в следующем месяце она скопируется без флага и вернётся
@@ -1141,12 +1217,32 @@ class BudgetStore:
         return row["date"].isoformat()
 
     def delete_item(self, item_id):
-        """Мягкое удаление: delete_flg = 1, строка остаётся в таблице."""
+        """Мягкое удаление: delete_flg = 1, строка остаётся в таблице.
+        Удаление статьи удаляет и её подстатьи (уровень 2 под ней в том же периоде)."""
         sheet_id, rows, row_count = self._load(write=True)
         row = self._active_item(rows, item_id)
+        block = [row]
+        if row.get("level",1) <= 1:
+            period_rows = sorted(
+                (other for other in rows
+                 if other["date"] == row["date"] and not other["deleted"] and other["name"]),
+                key=lambda other: other["row"]
+            )
+            seen = False
+            for other in period_rows:
+                if other["row"] == row["row"]:
+                    seen = True
+                    continue
+                if not seen:
+                    continue
+                if other.get("level",1) == 2:
+                    block.append(other)
+                else:
+                    break
+        block_ids = {item["id"] for item in block}
         others = [
             other for other in rows
-            if other["date"] == row["date"] and not other["deleted"] and other["id"] != row["id"]
+            if other["date"] == row["date"] and not other["deleted"] and other["id"] not in block_ids
         ]
         if not others:
             # последняя статья периода: чтобы не потерять период и зарплату,
@@ -1155,7 +1251,9 @@ class BudgetStore:
             self._insert_after(
                 sheet_id, row["row"], row_count, _values_for_sheet(_next_id(rows), anchor)
             )
-        self._write([{"range": f"'{BUDGET_SHEET}'!G{row['row']}", "values": [[1]]}])
+        self._write([
+            {"range": f"'{BUDGET_SHEET}'!G{item['row']}", "values": [[1]]} for item in block
+        ])
         return row["date"].isoformat()
 
     def set_income(self, pay_date, salary=None, scope=None, extra=None):
@@ -1199,24 +1297,34 @@ class BudgetStore:
     def reorder(self, pay_date, ids):
         """Новый порядок статей одного периода. Строки остаются на тех же местах таблицы,
         которые занимали статьи этого периода, — внутри них меняется только очерёдность.
-        id, даты и суммы едут вместе со своей строкой и не меняются."""
+        id, даты и суммы едут вместе со своей строкой и не меняются.
+        Подстатьи (level 2) не таскаются отдельно: они всегда идут блоком под своей
+        статьёй, поэтому в ids приходят только id статей."""
         _, rows, _ = self._load(write=True)
         items = [
             row for row in rows
             if row["date"] == pay_date and not row["deleted"] and row["name"]
         ]
-        by_id = {row["id"]: row for row in items}
+        items.sort(key=lambda row: row["row"])
+        # блоки: статья + идущие следом подстатьи (до следующей статьи)
+        blocks = []
+        for row in items:
+            if row.get("level",1) == 2 and blocks:
+                blocks[-1].append(row)
+            else:
+                blocks.append([row])
+        by_id = {block[0]["id"]: block for block in blocks}
         if len(set(ids)) != len(ids) or set(ids) != set(by_id):
             raise BudgetError("Список статей изменился. Обнови страницу и повтори.", 409)
-        items.sort(key=lambda row: row["row"])
-        if [row["id"] for row in items] == ids:
+        if [block[0]["id"] for block in blocks] == ids:
             return pay_date.isoformat()
+        ordered = [row for item_id in ids for row in by_id[item_id]]
         self._write([
             {
                 "range": f"'{BUDGET_SHEET}'!A{slot['row']}:{LAST_COLUMN}{slot['row']}",
-                "values": [list(by_id[item_id]["raw"])]
+                "values": [list(new_row["raw"])]
             }
-            for slot, item_id in zip(items, ids)
+            for slot, new_row in zip(items, ordered)
         ])
         return pay_date.isoformat()
 
@@ -1485,12 +1593,15 @@ def budget_month_add():
 @_login_required
 def budget_item_add():
     def apply(data):
+        parent = data.get("parent")
+        permanent = data.get("permanent")
         return _store_call(
             "add_item",
             parse_iso_date(data.get("pay_date"), "Дата зарплаты"),
             parse_name(data.get("name")),
             parse_amount(data.get("amount"), "Сумма расхода"),
-            parse_permanent(data.get("permanent"))
+            None if permanent is None else parse_permanent(permanent),
+            None if parent is None else parse_item_id(parent)
         )
     return _budget_mutation(apply)
 
@@ -1499,12 +1610,13 @@ def budget_item_add():
 @_login_required
 def budget_item_update():
     def apply(data):
+        permanent = data.get("permanent")
         return _store_call(
             "update_item",
             parse_item_id(data.get("id")),
             parse_name(data.get("name")),
             parse_amount(data.get("amount"), "Сумма расхода"),
-            parse_permanent(data.get("permanent"))
+            None if permanent is None else parse_permanent(permanent)
         )
     return _budget_mutation(apply)
 
