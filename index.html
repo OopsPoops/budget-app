@@ -162,6 +162,22 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-list.noanim .bd-row{transition:none}
 .bd-row:active{background:var(--input-bg)}
 .bd-row.lifted{z-index:6;border-radius:16px;border-top-color:transparent;box-shadow:0 14px 34px rgba(0,0,0,.24),0 0 0 .5px var(--card-border);transition:box-shadow .2s;cursor:grabbing;background:var(--card)}
+/* статья с подстатьями: блок — единица перетаскивания, подстатьи живут внутри него */
+.bd-block{position:relative;transition:transform .25s cubic-bezier(.22,1,.36,1),box-shadow .2s,opacity .2s}
+.bd-list.noanim .bd-block{transition:none}
+.bd-block.lifted{z-index:6;border-radius:16px;box-shadow:0 14px 34px rgba(0,0,0,.24),0 0 0 .5px var(--card-border);transition:box-shadow .2s;cursor:grabbing;background:var(--card);overflow:hidden}
+.bd-block.holding{animation:bdShimmer .6s ease-in-out infinite}
+.bd-subrow{position:relative;display:flex;align-items:center;gap:6px;height:46px;padding:0 16px 0 46px;background:var(--card);border-top:1px solid var(--line);cursor:pointer;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.bd-subrow:active{background:var(--input-bg)}
+.bd-subrow .bd-name b{font-size:14px;font-weight:600}
+.bd-subrow .bd-sum{font-size:15px}
+.bd-subrow.zero .bd-name b,.bd-subrow.zero .bd-sum{color:var(--muted)}
+.bd-subrow.done{opacity:.82}
+.bd-subrow.done .bd-name b{text-decoration:line-through;text-decoration-thickness:1.5px;color:var(--muted);font-weight:650}
+.bd-subrow.done .bd-sum{color:var(--muted);font-weight:650}
+.bd-chev{flex:none;width:20px;height:20px;margin-left:4px;color:var(--muted);display:grid;place-items:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.bd-chev svg{width:15px;height:15px;display:block;transition:transform .2s}
+.bd-chev.open svg{transform:rotate(180deg)}
 /* строку перетаскивают долгим нажатием в любом месте (стили .holding и .lifted ниже) */
 .bd-name{flex:1;min-width:0}
 .bd-name b{display:block;font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -716,7 +732,7 @@ const MONTHS=['Январь','Февраль','Март','Апрель','Май'
 const MONTHS_GEN=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WEEKDAYS=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
 const MAX_AHEAD=24;    // сколько месяцев вперёд можно добавить за раз (как на сервере)
-const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0};
+const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0,expanded:new Set()};
 const nf=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2});
 const money=n=>nf.format(n)+'\u00a0₽';
 const signed=n=>n>0?'+'+money(n):money(n);      // положительный остаток — со знаком «+»
@@ -849,14 +865,23 @@ function summaryHtml(p){
   +'<div class="bd-lg tot"><span>'+(bal<0?'Превышение':'Остаток')+'</span><b>'+signed(bal)+'</b></div></div></div>'
   +'<div class="bd-mrows">'+rows+'</div></section>';
 }
-function rowHtml(it){
+const sumHtml=it=>it.was?'<s class="was">'+money(it.was)+'</s><span class="now">'+money(0)+'</span>':money(it.amount);
+const chevSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+function rowHtml(it,childCount,open){
  const zero=it.amount===0;
  const tagLabel=it.permanent?'Постоянная':'Разовая';
- const sum=it.was?'<s class="was">'+money(it.was)+'</s><span class="now">'+money(0)+'</span>':money(it.amount);
  return '<div class="bd-row'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
-  +'<div class="bd-name"><div class="bd-title"><i class="bd-tag '+(it.permanent?'perm':'once')+'" role="img" aria-label="'+tagLabel+' статья" title="'+tagLabel+' статья">'+(it.permanent?'П':'Р')+'</i><b>'+esc(it.name)+'</b></div></div>'
-  +'<div class="bd-sum">'+sum+'</div>'
+  +'<div class="bd-name"><div class="bd-title"><i class="bd-tag '+(it.permanent?'perm':'once')+'" role="img" aria-label="'+tagLabel+' статья" title="'+tagLabel+' статья">'+(it.permanent?'П':'Р')+'</i><b>'+esc(it.name)+'</b>'
+  +(childCount?'<span class="bd-chev'+(open?' open':'')+'" data-act="expand" data-id="'+it.id+'" role="button" aria-label="'+(open?'Свернуть':'Развернуть')+' подстатьи: '+esc(it.name)+'">'+chevSvg+'</span>':'')
+  +'</div></div>'
+  +'<div class="bd-sum">'+sumHtml(it)+'</div>'
   +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
+}
+function subRowHtml(it){
+ const zero=it.amount===0;
+ return '<div class="bd-subrow'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
+  +'<div class="bd-name"><b>'+esc(it.name)+'</b></div>'
+  +'<div class="bd-sum">'+sumHtml(it)+'</div></div>';
 }
 function firstHtml(){
  return '<section class="bd-card bd-first"><div class="bd-ico">💰</div><h3>Бюджета пока нет</h3>'
@@ -871,12 +896,22 @@ function bodyHtml(){
  if(!st.periods.length)return firstHtml();
  if(S.ghost)return ghostHtml(S.ghost);
  const p=current()||st.periods[0];
- const n=p.items.length;
- const nd=p.items.filter(x=>x.done).length;
+ const tops=p.items.filter(x=>x.level!==2);          // в счётчиках и списке — только статьи
+ const n=tops.length;
+ const nd=tops.filter(x=>x.done).length;
+ // блоки «статья + подстатьи»: подстатьи идут в items сразу после своей статьи
+ const byId=new Map(),blocks=[];
+ tops.forEach(it=>{const b={it,kids:[]};byId.set(it.id,b);blocks.push(b);});
+ p.items.forEach(it=>{if(it.level===2&&it.parent!=null){const b=byId.get(it.parent);if(b)b.kids.push(it);}});
+ const listHtml=blocks.length?blocks.map(b=>{
+  const open=S.expanded.has(b.it.id);
+  return '<div class="bd-block" data-id="'+b.it.id+'">'+rowHtml(b.it,b.kids.length,open)
+   +(open?b.kids.map(subRowHtml).join(''): '')+'</div>';
+ }).join(''):'<div class="bd-empty">Статей пока нет. Добавь первую кнопкой ниже.</div>';
  return heroHtml(p)
   +summaryHtml(p)
   +'<section class="bd-card"><div class="bd-card-head">Статьи расходов<span>'+n+' '+plural(n,['статья','статьи','статей'])+(nd?' · выполнено '+nd:'')+'</span></div>'
-  +'<div class="bd-list" id="bdList">'+(n?p.items.map(rowHtml).join(''):'<div class="bd-empty">Статей пока нет. Добавь первую кнопкой ниже.</div>')+'</div></section>'
+  +'<div class="bd-list" id="bdList">'+listHtml+'</div></section>'
   +'<button class="bd-add" type="button" data-act="add"><span class="bd-plus">+</span>Добавить статью</button>';
 }
 function render(){
@@ -1134,12 +1169,13 @@ function toggleDone(id){
 }
 
 // ---------- статьи ----------
-function itemFields(it){
+function itemFields(it,sub){
  const perm=it?it.permanent:false;
+ const isSub=sub||!!(it&&it.level===2);
  return '<label class="field"><span>Название</span><input class="value-input bd-left" id="bdName" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" placeholder="Название статьи" value="'+esc(it?it.name:'')+'"></label>'
   +'<label class="field"><span>Сумма, ₽</span><input class="value-input" id="bdAmount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.amount):'')+'"></label>'
-  +'<div class="field"><span>Постоянная статья</span><div class="bd-seg" id="bdPerm"><button type="button" data-v="1" class="'+(perm?'on':'')+'">Да</button><button type="button" data-v="0" class="'+(perm?'':'on')+'">Нет</button></div></div>'
-  +'<div class="bd-hint">«Да» — статья копируется в новые месяцы. «Нет» — только в этой зарплате.</div>'
+  +(isSub?'':'<div class="field"><span>Постоянная статья</span><div class="bd-seg" id="bdPerm"><button type="button" data-v="1" class="'+(perm?'on':'')+'">Да</button><button type="button" data-v="0" class="'+(perm?'':'on')+'">Нет</button></div></div>'
+  +'<div class="bd-hint">«Да» — статья копируется в новые месяцы. «Нет» — только в этой зарплате.</div>')
   +(it&&it.was?'<div class="bd-hint">Сейчас 0 ₽ — в следующей зарплате вернётся '+money(it.was)+'.</div>':'');
 }
 function readItemForm(){
@@ -1147,7 +1183,8 @@ function readItemForm(){
  if(!name){formError('Введи название статьи');return null;}
  const m=parseMoney($('bdAmount').value,'Сумма');
  if(m.error){formError(m.error);return null;}
- return {name,amount:m.value,permanent:$('bdPerm').querySelector('.on').dataset.v==='1'};
+ const seg=$('bdPerm');
+ return {name,amount:m.value,permanent:seg?seg.querySelector('.on').dataset.v==='1':null};
 }
 async function commit(action,extra){
  const data=await call(action,extra);
@@ -1170,11 +1207,28 @@ function openAddItem(){
   }
  });
 }
+function openAddSub(parent){
+ const p=current();
+ if(!p||S.busy)return;
+ const pay=p.pay_date;
+ showForm({
+  icon:'🧾',title:'Подстатья · '+dayLabel(pay),html:itemFields(null,true),saveLabel:'Добавить',
+  onSave:async()=>{
+   const v=readItemForm();
+   if(!v)return false;
+   S.expanded.add(parent.id);              // показать свежую подстатью сразу
+   await commit('item/add',{pay_date:pay,parent:parent.id,...v,permanent:parent.permanent});
+   return true;
+  }
+ });
+}
 async function saveItem(it,forceAmount){
  const v=readItemForm();
  if(!v)return false;
  if(forceAmount!==null)v.amount=forceAmount;
- if(v.name===it.name&&v.amount===it.amount&&v.permanent===it.permanent)return true;
+ if(it.level===2)v.permanent=it.permanent;   // у подстатьи флаг — как у родителя
+ const permSame=v.permanent===null||v.permanent===it.permanent;
+ if(v.name===it.name&&v.amount===it.amount&&permSame)return true;
  await commit('item/update',{id:it.id,...v});
  return true;
 }
@@ -1182,14 +1236,17 @@ function openEditItem(id){
  const p=current();
  const it=p&&p.items.find(x=>x.id===id);
  if(!it||S.busy)return;
+ const isSub=it.level===2;
  showForm({
-  icon:'✏️',title:'Статья',html:itemFields(it),
+  icon:isSub?'↳':'✏️',title:isSub?'Подстатья':'Статья',html:itemFields(it),
   onSave:()=>saveItem(it,null),
   links:[
+   ...(isSub?[]:[{id:'addsub',text:'＋ Подстатья',run:()=>{openAddSub(it);return false;}}]),
    ...(it.was?[]:[{id:'zero',text:'Поставить 0 ₽',run:()=>saveItem(it,0)}]),
    {id:'delete',text:'Удалить запись',danger:true,run:async()=>{
      uiHaptic('error');
-     const choice=await ask('Удалить запись?','Статья «'+it.name+'» исчезнет из этой зарплаты. В таблице запись останется с пометкой удаления.',[{id:'del',type:'destructive',text:'Удалить'},{id:'cancel',type:'cancel'}]);
+     const kids=(current()||{items:[]}).items.filter(x=>x.level===2&&x.parent===it.id).length;
+     const choice=await ask('Удалить запись?','Статья «'+it.name+'» исчезнет из этой зарплаты'+(kids?' вместе с '+kids+' '+plural(kids,['подстатьёй','подстатьями','подстатьями']):'')+'. В таблице запись останется с пометкой удаления.',[{id:'del',type:'destructive',text:'Удалить'},{id:'cancel',type:'cancel'}]);
      if(choice!=='del')return false;
      await commit('item/delete',{id:it.id});
      return true;
@@ -1343,13 +1400,19 @@ host.addEventListener('click',e=>{
    case 'first':openFirstMonth();break;
    case 'retry':load(true);break;
    case 'done':toggleDone(Number(t.dataset.id));break;
+   case 'expand':toggleExpand(Number(t.dataset.id));break;
   }
   return;
  }
  if(S.noClick)return;
- const row=e.target.closest('.bd-row');
+ const row=e.target.closest('.bd-row,.bd-subrow');
  if(row)openEditItem(Number(row.dataset.id));
 });
+function toggleExpand(id){
+ if(S.expanded.has(id))S.expanded.delete(id);else S.expanded.add(id);
+ render();
+ selectionHaptic();
+}
 
 // ---------- корзина покупок (лист bascket) ----------
 const B={items:null,deleted:[],pending:new Map(),want:new Map(),pend:new Map(),busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false};
@@ -1708,7 +1771,8 @@ basketHost.addEventListener('click',e=>{
 // ---------- перетаскивание статей ----------
 // Порядок меняется долгим нажатием на строку в любом месте: удерживаешь HOLD_MS (2 секунды) — строка мерцает,
 // потом «поднимается», и её можно тащить. Короткое нажатие по-прежнему открывает окно статьи.
-function initRowDrag(container,state,onCommit,onRender){
+function initRowDrag(container,state,onCommit,onRender,unitSel){
+ unitSel=unitSel||'.bd-row';
  const HOLD_MS=2000;
  let d=null,press=null,raf=0,lastY=0;
  const swipes=()=>{};
@@ -1717,11 +1781,17 @@ function initRowDrag(container,state,onCommit,onRender){
  function update(){
   if(!d)return;
   const sy=window.scrollY;
-  const lo=d.tops[0]-d.tops[d.from],hi=d.tops[d.rows.length-1]-d.tops[d.from];
+  // блоки могут быть разной высоты (статья + подстатьи): границы — края списка
+  const lo=-(d.tops[d.from]-d.tops[0]);
+  const hi=(d.tops[d.rows.length-1]+d.hs[d.rows.length-1])-(d.tops[d.from]+d.hs[d.from]);
   const dy=Math.max(lo,Math.min(hi,lastY+sy-d.y0));
   d.row.style.transform='translateY('+dy+'px) scale(1.02)';
-  // строки одной высоты: новая позиция — на сколько строк сдвинули, но в пределах списка
-  const to=Math.max(0,Math.min(d.rows.length-1,d.from+Math.round(dy/d.h)));
+  // новая позиция — по центрам блоков: сколько блоков выше центра перетаскиваемого
+  const draggedCenter=d.tops[d.from]+dy+d.hs[d.from]/2;
+  let to=0;
+  for(let i=0;i<d.rows.length;i++){
+   if(i!==d.from&&d.tops[i]+d.hs[i]/2<draggedCenter)to++;
+  }
   if(to===d.to)return;
   d.to=to;
   selectionHaptic();
@@ -1743,12 +1813,13 @@ function initRowDrag(container,state,onCommit,onRender){
  }
  function start(list,row,pointerId,clientY,handle){
   if(state.busy||state.dragging)return false;
-  const rows=[...list.querySelectorAll('.bd-row')];
+  const rows=[...list.querySelectorAll(unitSel)];
   if(rows.length<2)return false;
   const sy=window.scrollY;
   const tops=rows.map(r=>r.getBoundingClientRect().top+sy);
+  const hs=rows.map(r=>r.getBoundingClientRect().height);
   const from=rows.indexOf(row);
-  d={id:pointerId,list,row,rows,tops,from,to:from,y0:clientY+sy,h:row.getBoundingClientRect().height,handle};
+  d={id:pointerId,list,row,rows,tops,hs,from,to:from,y0:clientY+sy,h:hs[from],handle};
   lastY=clientY;
   try{handle.setPointerCapture(pointerId);}catch(_){}
   row.classList.add('lifted');
@@ -1767,11 +1838,11 @@ function initRowDrag(container,state,onCommit,onRender){
  }
  container.addEventListener('pointerdown',e=>{
   if(d||(e.pointerType==='mouse'&&e.button!==0))return;
-  if(e.target.closest('.bd-check,.bk-qty'))return;      // кружок и счётчик количества — отдельные кнопки
-  const row=e.target.closest('.bd-row');
+  if(e.target.closest('.bd-check,.bk-qty,.bd-chev'))return; // кружок, счётчик и стрелка — отдельные кнопки
+  const row=e.target.closest(unitSel);
   const list=row&&row.closest('.bd-list');
   if(!row||!list||state.busy||state.dragging)return;
-  if(list.querySelectorAll('.bd-row').length<2)return;   // одну строку переставлять некуда
+  if(list.querySelectorAll(unitSel).length<2)return;   // один блок переставлять некуда
   cancelHold();
   const p={id:e.pointerId,ox:e.clientX,oy:e.clientY,y:e.clientY,row};
   // Мерцать начинаем не сразу, а через 0,35 с: короткое нажатие (открыть окно) не должно мигать.
@@ -1807,17 +1878,21 @@ function initRowDrag(container,state,onCommit,onRender){
   swipes(true);
   state.noClick=true;
   setTimeout(()=>{state.noClick=false;},350);
-  g.row.style.transform='translateY('+((g.to-g.from)*g.h)+'px)';
+  // у блоков разная высота: сдвиг на «сброс» — сумма высот пройденных блоков
+  let settle=0;
+  if(g.to>g.from){for(let i=g.from+1;i<=g.to;i++)settle+=g.hs[i];}
+  else{for(let i=g.to;i<g.from;i++)settle-=g.hs[i];}
+  g.row.style.transform='translateY('+settle+'px)';
   g.row.classList.remove('lifted');
   setTimeout(()=>{
-   const rows=[...g.list.querySelectorAll('.bd-row')];
+   const rows=[...g.list.querySelectorAll(unitSel)];
    g.list.classList.add('noanim');
    rows.forEach(r=>{r.style.transform='';});
    state.dragging=false;
    if(g.to!==g.from&&g.list.isConnected){
     const ref=rows[g.to>g.from?g.to+1:g.to]||null;
     g.list.insertBefore(g.row,ref);
-    onCommit([...g.list.querySelectorAll('.bd-row')].map(r=>Number(r.dataset.id)),g.list);
+    onCommit([...g.list.querySelectorAll(unitSel)].map(r=>Number(r.dataset.id)),g.list);
    }else if(state.pendingRender){
     onRender();
    }
@@ -1828,7 +1903,7 @@ function initRowDrag(container,state,onCommit,onRender){
  container.addEventListener('pointerup',end);
  container.addEventListener('pointercancel',end);
 }
-initRowDrag(host,S,(ids)=>commitOrder(ids),()=>render());
+initRowDrag(host,S,(ids)=>commitOrder(ids),()=>render(),'.bd-block');
 initRowDrag(basketHost,B,(ids,list)=>basketCommitOrder(list,ids),()=>renderBasket());
 
 async function commitOrder(ids){
@@ -1836,7 +1911,13 @@ async function commitOrder(ids){
  if(!p)return;
  const before=p.items.slice();
  const byId=new Map(before.map(i=>[i.id,i]));
- p.items=ids.map(id=>byId.get(id)).filter(Boolean);      // экран уже показывает новый порядок
+ const kidsOf=new Map();
+ before.forEach(i=>{if(i.level===2&&i.parent!=null){
+  if(!kidsOf.has(i.parent))kidsOf.set(i.parent,[]);
+  kidsOf.get(i.parent).push(i);
+ }});
+ // ids — только статьи: подстатьи остаются блоком под своей статьёй
+ p.items=ids.flatMap(id=>{const it=byId.get(id);return it?[it,...(kidsOf.get(id)||[])]:[];});
  setBusy(true);
  S.seq++;
  try{
@@ -1875,7 +1956,7 @@ window.Budget={
  close(){
   S.seq++;
   S.state=null;S.sel=null;S.ghost=null;S.busy=false;S.dragging=false;
-  S.doneOps=0;
+  S.doneOps=0;S.expanded.clear();
   setSheetLink(null);
   form.busy=false;
   $('budgetFormBackdrop').classList.remove('visible');
