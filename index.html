@@ -178,6 +178,17 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-chev{flex:none;width:20px;height:20px;margin-left:4px;color:var(--muted);display:grid;place-items:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .bd-chev svg{width:15px;height:15px;display:block;transition:transform .2s}
 .bd-chev.open svg{transform:rotate(180deg)}
+/* фильтр статей в шапке карточки */
+.bd-fbtn{border:0;background:transparent;color:var(--muted);font-size:15px;width:26px;height:26px;margin-right:6px;padding:0;cursor:pointer;display:inline-grid;place-items:center;vertical-align:-5px}
+.bd-fbtn svg{width:17px;height:17px;display:block}
+.bd-filterrow{padding:0 16px 8px}
+.bd-filterrow .value-input{width:100%}
+/* «Остаток»/«Сверх» — строка сверки подстатей с суммой статьи */
+.bd-subrow.bd-diff{border-top-style:dashed}
+.bd-subrow.bd-diff .bd-name b{color:var(--muted);font-weight:600;font-style:italic}
+.bd-subrow.bd-diff .bd-sum{color:var(--muted)}
+.bd-subrow .bd-check{width:38px;height:46px}
+.bd-subrow .bd-check svg{width:22px;height:22px}
 /* строку перетаскивают долгим нажатием в любом месте (стили .holding и .lifted ниже) */
 .bd-name{flex:1;min-width:0}
 .bd-name b{display:block;font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -732,7 +743,7 @@ const MONTHS=['Январь','Февраль','Март','Апрель','Май'
 const MONTHS_GEN=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WEEKDAYS=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
 const MAX_AHEAD=24;    // сколько месяцев вперёд можно добавить за раз (как на сервере)
-const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0,expanded:new Set()};
+const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0,expanded:new Set(),filterOn:false,filter:''};
 const nf=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2});
 const money=n=>nf.format(n)+'\u00a0₽';
 const signed=n=>n>0?'+'+money(n):money(n);      // положительный остаток — со знаком «+»
@@ -867,21 +878,29 @@ function summaryHtml(p){
 }
 const sumHtml=it=>it.was?'<s class="was">'+money(it.was)+'</s><span class="now">'+money(0)+'</span>':money(it.amount);
 const chevSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-function rowHtml(it,childCount,open){
+function rowHtml(it,childCount,open,doneEff){
+ const done=doneEff===undefined?it.done:doneEff;
  const zero=it.amount===0;
  const tagLabel=it.permanent?'Постоянная':'Разовая';
- return '<div class="bd-row'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
+ return '<div class="bd-row'+(zero?' zero':'')+(done?' done':'')+'" data-id="'+it.id+'">'
   +'<div class="bd-name"><div class="bd-title"><i class="bd-tag '+(it.permanent?'perm':'once')+'" role="img" aria-label="'+tagLabel+' статья" title="'+tagLabel+' статья">'+(it.permanent?'П':'Р')+'</i><b>'+esc(it.name)+'</b>'
   +(childCount?'<span class="bd-chev'+(open?' open':'')+'" data-act="expand" data-id="'+it.id+'" role="button" aria-label="'+(open?'Свернуть':'Развернуть')+' подстатьи: '+esc(it.name)+'">'+chevSvg+'</span>':'')
   +'</div></div>'
   +'<div class="bd-sum">'+sumHtml(it)+'</div>'
-  +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
+  +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
 }
 function subRowHtml(it){
  const zero=it.amount===0;
  return '<div class="bd-subrow'+(zero?' zero':'')+(it.done?' done':'')+'" data-id="'+it.id+'">'
   +'<div class="bd-name"><b>'+esc(it.name)+'</b></div>'
-  +'<div class="bd-sum">'+sumHtml(it)+'</div></div>';
+  +'<div class="bd-sum">'+sumHtml(it)+'</div>'
+  +'<button class="bd-check" type="button" data-act="done" data-id="'+it.id+'" role="checkbox" aria-checked="'+(it.done?'true':'false')+'" aria-label="Выполнено: '+esc(it.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring" cx="12" cy="12" r="10.2"/><path class="tick" d="M7.4 12.4l3.1 3.1 6.1-6.6"/></svg></button></div>';
+}
+// строка «Остаток»: показывает, сколько суммы статьи не покрыто подстатьями (или наоборот)
+function diffRowHtml(diff){
+ if(Math.abs(diff)<0.005)return '';
+ const over=diff<0;
+ return '<div class="bd-subrow bd-diff"><div class="bd-name"><b>'+(over?'Сверх':'Остаток')+'</b></div><div class="bd-sum">'+money(Math.abs(diff))+'</div></div>';
 }
 function firstHtml(){
  return '<section class="bd-card bd-first"><div class="bd-ico">💰</div><h3>Бюджета пока нет</h3>'
@@ -903,14 +922,28 @@ function bodyHtml(){
  const byId=new Map(),blocks=[];
  tops.forEach(it=>{const b={it,kids:[]};byId.set(it.id,b);blocks.push(b);});
  p.items.forEach(it=>{if(it.level===2&&it.parent!=null){const b=byId.get(it.parent);if(b)b.kids.push(it);}});
- const listHtml=blocks.length?blocks.map(b=>{
+ // фильтр по названию: статья подходит сама или по подстатьям
+ const q=(S.filter||'').trim().toLowerCase();
+ const norm=s=>String(s).toLowerCase().replace(/ё/g,'е');
+ const match=name=>!q||norm(name).includes(q);
+ const shown=blocks.map(b=>{
+  const kidsMatch=b.kids.filter(k=>match(k.name));
+  const selfMatch=match(b.it.name);
+  if(!selfMatch&&!kidsMatch.length)return null;
+  return {it:b.it,kids:selfMatch?b.kids:kidsMatch};
+ }).filter(Boolean);
+ const listHtml=shown.length?shown.map(b=>{
   const open=S.expanded.has(b.it.id);
-  return '<div class="bd-block" data-id="'+b.it.id+'">'+rowHtml(b.it,b.kids.length,open)
-   +(open?b.kids.map(subRowHtml).join(''): '')+'</div>';
- }).join(''):'<div class="bd-empty">Статей пока нет. Добавь первую кнопкой ниже.</div>';
+  const doneEff=b.kids.length?b.kids.every(k=>k.done):b.it.done;   // чек статьи = все подстатьи выполнены
+  const kidsSum=r2(b.kids.reduce((a,k)=>a+k.amount,0));
+  return '<div class="bd-block" data-id="'+b.it.id+'">'+rowHtml(b.it,b.kids.length,open,doneEff)
+   +(open?b.kids.map(subRowHtml).join('')+diffRowHtml(r2(b.it.amount-kidsSum)):'')+'</div>';
+ }).join(''):'<div class="bd-empty">'+(q?'Ничего не найдено':'Статей пока нет. Добавь первую кнопкой ниже.')+'</div>';
+ const filterOn=!!S.filterOn;
  return heroHtml(p)
   +summaryHtml(p)
-  +'<section class="bd-card"><div class="bd-card-head">Статьи расходов<span>'+n+' '+plural(n,['статья','статьи','статей'])+(nd?' · выполнено '+nd:'')+'</span></div>'
+  +'<section class="bd-card"><div class="bd-card-head">Статьи расходов<span>'+(filterOn?'<button class="bd-fbtn" type="button" data-act="filter" aria-label="Скрыть фильтр">✕</button>':'<button class="bd-fbtn" type="button" data-act="filter" aria-label="Фильтр по статьям"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></svg></button>')+n+' '+plural(n,['статья','статьи','статей'])+(nd?' · выполнено '+nd:'')+'</span></div>'
+  +(filterOn?'<div class="bd-filterrow"><input id="bdFilter" class="value-input" type="search" autocomplete="off" placeholder="Название статьи" value="'+esc(S.filter||'')+'"></div>':'')
   +'<div class="bd-list" id="bdList">'+listHtml+'</div></section>'
   +'<button class="bd-add" type="button" data-act="add"><span class="bd-plus">+</span>Добавить статью</button>';
 }
@@ -1150,14 +1183,18 @@ function toggleDone(id){
  const p=current();
  const it=p&&p.items.find(x=>x.id===id);
  if(!it)return;
- const next=!it.done;
- it.done=next;
+ // у статьи с подстатьями чек общий: переключаем её и все подстатьи разом
+ const kids=p.items.filter(x=>x.level===2&&x.parent===it.id);
+ const cur=kids.length?kids.every(k=>k.done):it.done;
+ const next=!cur;
+ [it,...kids].forEach(t=>{t.done=next;});
  render();
  selectionHaptic();
  S.doneOps++;
  doneChain=doneChain.then(async()=>{
   try{
-   const data=await call('item/done',{id,done:next});
+   let data=null;
+   for(const t of [it,...kids])data=await call('item/done',{id:t.id,done:next});
    S.doneOps--;
    if(S.doneOps===0&&!S.busy&&!S.dragging&&isOpen()){S.seq++;adopt(data);render();}
   }catch(error){
@@ -1401,6 +1438,12 @@ host.addEventListener('click',e=>{
    case 'retry':load(true);break;
    case 'done':toggleDone(Number(t.dataset.id));break;
    case 'expand':toggleExpand(Number(t.dataset.id));break;
+   case 'filter':
+    S.filterOn=!S.filterOn;
+    if(!S.filterOn)S.filter='';
+    render();
+    if(S.filterOn){const f=$('bdFilter');if(f)f.focus();}
+    break;
   }
   return;
  }
@@ -1413,6 +1456,14 @@ function toggleExpand(id){
  render();
  selectionHaptic();
 }
+// фильтр статей: перерисовываем список и возвращаем фокус в поле
+host.addEventListener('input',e=>{
+ if(e.target.id!=='bdFilter')return;
+ S.filter=e.target.value;
+ render();
+ const f=$('bdFilter');
+ if(f){f.focus();try{f.setSelectionRange(f.value.length,f.value.length);}catch(_){}}
+});
 
 // ---------- корзина покупок (лист bascket) ----------
 const B={items:null,deleted:[],pending:new Map(),want:new Map(),pend:new Map(),busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false};
@@ -1944,6 +1995,7 @@ window.Budget={
   window.scrollTo(0,0);
   S.sel=null;                           // каждый раз начинаем с ближайшей будущей зарплаты
   S.ghost=null;
+  S.expanded.clear();                   // подстатьи свёрнуты при каждом открытии
   if(S.state){adopt(S.state);render();} // сразу показываем то, что уже загружали, свежее подтянется следом
   load(false);
  },
@@ -1956,7 +2008,7 @@ window.Budget={
  close(){
   S.seq++;
   S.state=null;S.sel=null;S.ghost=null;S.busy=false;S.dragging=false;
-  S.doneOps=0;S.expanded.clear();
+  S.doneOps=0;S.expanded.clear();S.filterOn=false;S.filter='';
   setSheetLink(null);
   form.busy=false;
   $('budgetFormBackdrop').classList.remove('visible');
