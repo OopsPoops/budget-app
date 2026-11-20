@@ -655,17 +655,9 @@ def build_state(rows):
             })
             if level == 1:
                 parent_id = row["id"]
-        # у статьи с подстатьями сумма — сумма подстатей (своя ячейка суммы не учитывается)
-        child_totals = {}
-        for item in items:
-            if item["level"] == 2:
-                key = item["parent"]
-                child_totals[key] = _tidy(child_totals.get(key, 0) + item["amount"])
-        for item in items:
-            if item["id"] in child_totals:
-                item["amount"] = child_totals[item["id"]]
-                item["was"] = None
-        # в расходы идут только статьи: подстатьи уже учтены в сумме родителя
+        # у статьи собственная сумма; подстатьи — её расшифровка.
+        # Если сумма подстатей не сходится со статьёй, фронт показывает «Остаток».
+        # В расходы идут только статьи: подстатьи уже учтены в сумме родителя.
         expenses = _tidy(sum(item["amount"] for item in items if item["level"] == 1))
         periods.append({
             "pay_date": day.isoformat(),
