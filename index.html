@@ -701,7 +701,7 @@ document.querySelectorAll('.nav-button').forEach(b=>b.addEventListener('click',(
 // ---------- приватный режим ----------
 const homeEl=$('screen-home');
 const privacyToggle=$('privacyToggle');
-let privacy=false,privacyAuto=false,orientReady=false,downAt=0;
+let privacy=false,privacyAuto=false,orientReady=false,downAt=0,flipped=false;
 function setPrivacy(on,auto){
   privacy=on;privacyAuto=!!auto;
   homeEl.classList.toggle('privacy',on);
@@ -720,8 +720,8 @@ function startOrientation(){
   window.addEventListener('deviceorientation',e=>{
     if(e.beta==null)return;
     const b=Math.abs(e.beta),now=performance.now();
-    if(b>140){if(!downAt)downAt=now;else if(now-downAt>350&&!privacy)setPrivacy(true,true);}
-    else{downAt=0;if(b<110&&privacy&&privacyAuto)setPrivacy(false,false);}
+    if(b>140){if(!downAt)downAt=now;else if(now-downAt>350&&!flipped){flipped=true;setPrivacy(!privacy,true);}}
+    else{downAt=0;flipped=false;}
   },{passive:true});
 }
 window.addEventListener('resize',moveNavPill);
