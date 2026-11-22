@@ -1400,13 +1400,12 @@ class BudgetStore:
         return self._load_basket()[1]
 
     def basket_add(self, name, qty, price, unit):
-        """Новый товар встаёт первым — сразу под шапкой, как свежие месяцы в cost."""
+        """Новый товар добавляется в конец списка."""
         sheet_id, rows, row_count = self._load_basket(write=True)
         new_row = {"name": name, "qty": qty, "price": price, "unit": unit,
                    "bought": False, "deleted": False}
-        top = 0 if any(row["row"] == 1 for row in rows) else 1   # 1 — под шапкой
         self._insert_rows(
-            sheet_id, top, row_count,
+            sheet_id, row_count, row_count,
             [self._basket_values(_next_id(rows), new_row)], False, date_col=None
         )
         return True

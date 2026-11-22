@@ -320,6 +320,9 @@ input:autofill{-webkit-text-fill-color:var(--input-text)!important;box-shadow:0 
 .bd-row.done .bd-name b{text-decoration:line-through;text-decoration-thickness:1.5px;color:var(--muted);font-weight:650}
 .bd-row.done .bd-sum{color:var(--muted);font-weight:650}
 .bd-row.done{opacity:.82}
+.bd-row.done .bk-info .bd-title b{text-decoration:line-through;text-decoration-thickness:1.5px;color:var(--muted);font-weight:650}
+.bd-row.done .bk-sub,.bd-row.done .bk-sum,.bd-row.done .bk-qn{color:var(--muted)}
+.bd-row.done .bk-qty{opacity:.55}
 
 /* мерцание строки: держишь нажатым — через 2 секунды строку можно тащить */
 .bd-row.holding{animation:bdShimmer .6s ease-in-out infinite}
@@ -399,6 +402,10 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
 .bk-pending .bk-qn,.bk-pending .bk-sum{color:#e5484d}
 @keyframes bkPend{0%,100%{background:var(--card)}50%{background:rgba(229,72,77,.16)}}
 .bk-suggest{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 14px}
+.bk-form-row{display:flex;gap:8px;align-items:flex-end}
+.bk-form-row .field{flex:1;min-width:0}
+.bk-form-row .bk-unit{flex:none;width:118px}
+.bk-form-row .bk-unit .bd-seg button{font-size:13.5px;padding:0 2px}
 .bk-suggest:empty{display:none}
 .bk-sug{border:1.5px solid rgba(32,169,155,.5);background:rgba(32,169,155,.12);color:var(--text);font:inherit;font-size:15px;font-weight:600;padding:8px 14px;border-radius:999px;cursor:pointer;-webkit-tap-highlight-color:transparent;animation:bkSugIn .28s cubic-bezier(.22,1,.36,1) both;animation-delay:calc(var(--i,0)*24ms)}
 .bk-sug b{font-weight:850;color:#13867a;background:rgba(32,169,155,.2);border-radius:5px;padding:0 1px}
@@ -1661,9 +1668,11 @@ function basketFields(it){
  const units=['шт','кг','г','л'].map(u=>'<button type="button" data-v="'+u+'" class="'+(unit0===u?'on':'')+'">'+u+'</button>').join('');
  return '<label class="field"><span>Название</span><input class="value-input bd-left" id="bkName" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" placeholder="Название" value="'+esc(it?it.name:'')+'"></label>'
   +'<div class="bk-suggest" id="bkSug" aria-live="polite"></div>'
+  +'<div class="bk-form-row">'
   +'<label class="field"><span>Количество</span><input class="value-input" id="bkQty" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="1" value="'+(it?qtyText(it.qty):'1')+'"></label>'
-  +'<div class="field"><span>Единица</span><div class="bd-seg" id="bkUnit">'+units+'</div></div>'
-  +'<label class="field"><span>Цена за единицу, ₽</span><input class="value-input" id="bkPrice" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.price):'')+'"></label>';
+  +'<div class="field bk-unit"><span>Единица</span><div class="bd-seg" id="bkUnit">'+units+'</div></div>'
+  +'<label class="field"><span>Цена, ₽</span><input class="value-input" id="bkPrice" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.price):'')+'"></label>'
+  +'</div>';
 }
 function readBasketForm(){
  const name=$('bkName').value.replace(/\s+/g,' ').trim();
