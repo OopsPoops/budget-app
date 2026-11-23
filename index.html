@@ -990,12 +990,13 @@ function summaryHtml(p){
   +'<div class="bd-mrows">'+rows+'</div></section>';
 }
 // Ближайшие разовые расходы: все «Разовые» статьи (permanent=false) из зарплатных
-// периодов не раньше сегодняшнего дня — плоский список «дата / название / сумма».
+// периодов не раньше выбранной даты (S.sel), а если ничего не выбрано — не раньше
+// сегодня. Плоский список «дата / название / сумма».
 function onceHtml(){
- const today=todayIso();
+ const from=S.sel||todayIso();
  const rows=[];
  let grand=0;
- S.state.periods.filter(x=>x.pay_date>=today).forEach(x=>{
+ S.state.periods.filter(x=>x.pay_date>=from).forEach(x=>{
   const info=dayInfo(x.pay_date),when=String(info.d).padStart(2,'0')+'.'+String(info.m).padStart(2,'0');
   x.items.forEach(it=>{
    if(it.level===2||it.permanent)return;
