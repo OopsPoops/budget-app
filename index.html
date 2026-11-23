@@ -700,12 +700,27 @@ function fmtUptime(sec){
   return m+' мин';
 }
 const statRow=(label,value,cls)=>'<div class="st-stat"><span>'+label+'</span><b'+(cls?' class="'+cls+'"':'')+'>'+value+'</b></div>';
+// метрики Render приходят как {value, unit}; unit — строка ("GB", "percent", "seconds"…)
+function fmtMetric(x){
+  if(!x||x.value==null)return null;
+  const n=Number(x.value);
+  if(!isFinite(n))return null;
+  const u=String(x.unit||'').toLowerCase();
+  if(u.includes('gb')||u==='gib')return Math.round(n*1024)+' МБ';
+  if(u.includes('mb')||u.includes('megabyte'))return Math.round(n)+' МБ';
+  if(u.includes('byte'))return (n/1048576).toFixed(1)+' МБ';
+  if(u.includes('ms')||u.includes('millisecond'))return Math.round(n)+' мс';
+  if(u.includes('second'))return n<10?(n*1000).toFixed(0)+' мс':n.toFixed(1)+' с';
+  if(u.includes('percent')||u==='%'||u==='pct')return (n<=1?n*100:n).toFixed(1)+'%';
+  if(u.includes('count')||u.includes('instance')||u==='')return Math.round(n).toLocaleString('ru-RU');
+  return n+' '+u;
+}
+const metricPair=(a,b)=>{const x=fmtMetric(a),y=fmtMetric(b);return x==null?y:y==null?x:x+' / '+y;};
 function statsHtml(d){
   const escV=v=>escapeHtml(String(v==null||v===''?'—':v));
   let html='<div class="st-stat-title">Приложение</div>'
    +statRow('Аптайм',escV(fmtUptime(d.uptime_seconds)))
    +statRow('Запросов всего',escV((d.requests||0).toLocaleString('ru-RU')))
-   +statRow('Последний запрос',escV(d.last_request_at?new Date(d.last_request_at).toLocaleString('ru-RU'):null))
    +statRow('Память сейчас',escV(d.memory_mb!=null?d.memory_mb+' МБ':null))
    +statRow('Память пиковая',escV(d.peak_memory_mb!=null?d.peak_memory_mb+' МБ':null))
    +statRow('CPU (в среднем)',escV(d.cpu_percent!=null?d.cpu_percent+'%':'—'));
@@ -716,10 +731,17 @@ function statsHtml(d){
   }else if(!r.ok){
     html+=statRow('Статус',escV(r.error||'недоступен'),'st-warn');
   }else{
+    const m=r.metrics||{};
+    const cpuTxt=metricPair(m.cpu,m.cpu_limit);
+    const memTxt=metricPair(m.memory,m.memory_limit);
     html+=statRow('Сервис',escV(r.name))
      +statRow('Состояние',r.suspended?'<span class="st-warn">На паузе</span>':'Работает')
      +(r.region?statRow('Регион',escV(r.region)):'' )
      +(r.plan?statRow('Тариф',escV(r.plan)):'')
+     +(cpuTxt?statRow('CPU',escV(cpuTxt)):'')
+     +(memTxt?statRow('Память',escV(memTxt)):'')
+     +(m.http_latency?statRow('Задержка HTTP',escV(fmtMetric(m.http_latency))):'')
+     +(m.instance_count?statRow('Инстансы',escV(fmtMetric(m.instance_count))):'')
      +(r.created_at?statRow('Создан',escV(new Date(r.created_at).toLocaleDateString('ru-RU'))):'')
      +(typeof r.dashboard_url==='string'&&r.dashboard_url.startsWith('https://')?'<div class="st-foot" style="padding-top:8px"><a href="'+escV(r.dashboard_url)+'" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">Открыть дашборд Render</a></div>':'');
   }

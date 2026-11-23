@@ -1,3 +1,4 @@
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -7,7 +8,7 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 
@@ -1486,7 +1487,7 @@ class BudgetStore:
 # (как и счётчик неудачных входов). Перезапуск сервиса обнуляет статистику.
 _STATS_START = time.time()
 _stats_lock = threading.Lock()
-_stats = {"requests": 0, "last_request": None}
+_stats = {"requests": 0}
 _RENDER_CACHE = {"at": 0.0, "data": None}
 _RENDER_TTL = 60               # ответ Render API кэшируем на минуту
 
@@ -1495,7 +1496,6 @@ _RENDER_TTL = 60               # ответ Render API кэшируем на м�
 def track_request():
     with _stats_lock:
         _stats["requests"] += 1
-        _stats["last_request"] = time.time()
 
 
 def _memory_info():
@@ -1517,9 +1517,44 @@ def _memory_info():
     return rss, peak
 
 
+_RENDER_METRICS = ("cpu", "cpu-limit", "memory", "memory-limit", "http-latency", "instance-count")
+
+
+def _render_get(api_key, path):
+    req = urllib.request.Request(
+        f"https://api.render.com/v1{path}",
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=6) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _latest_metric(series_list):
+    """Последнее значение метрики: сумма по всем рядам (инстансам) + единица измерения.
+    Ответ Metrics API — массив таймсерий {labels, values:[{timestamp, value}], unit}."""
+    total = 0.0
+    unit = None
+    seen = False
+    for item in series_list if isinstance(series_list, list) else []:
+        values = item.get("values") or []
+        if not values:
+            continue
+        point = max(values, key=lambda p: str(p.get("timestamp") or ""))
+        value = point.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        seen = True
+        total += value
+        if unit is None:
+            unit = item.get("unit")
+    return (round(total, 4), unit) if seen else (None, None)
+
+
 def _render_stats():
     """Статус сервиса в Render. Нужны RENDER_API_KEY и RENDER_SERVICE_ID из окружения;
-    без них блок просто помечается «не настроен». Кэшируем на минуту — дашборд не дёргаем."""
+    без них блок просто помечается «не настроен». Кэшируем на минуту — дашборд не дёргаем.
+    Метрики (cpu, memory, latency…) требуют у ключа скоуп Monitoring; без него они просто
+    не вернутся, блок статуса сервиса от этого не пострадает."""
     api_key = os.getenv("RENDER_API_KEY", "").strip()
     service_id = os.getenv("RENDER_SERVICE_ID", "").strip()
     if not api_key or not service_id:
@@ -1531,13 +1566,8 @@ def _render_stats():
             return cached
     result = {"configured": True, "service_id": service_id}
     try:
-        req = urllib.request.Request(
-            f"https://api.render.com/v1/services/{service_id}",
-            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        svc = (payload.get("service") or payload) if isinstance(payload, dict) else {}
+        svc = _render_get(api_key, f"/services/{service_id}")
+        svc = (svc.get("service") or svc) if isinstance(svc, dict) else {}
         details = svc.get("serviceDetails") or {}
         result.update({
             "ok": True,
@@ -1550,6 +1580,20 @@ def _render_stats():
             "dashboard_url": svc.get("dashboardUrl")
             or f"https://dashboard.render.com/web/{service_id}",
         })
+        metrics = {}
+        def fetch_metric(name):
+            try:
+                return name, _latest_metric(
+                    _render_get(api_key, f"/metrics/{name}?resource={service_id}&resolutionSeconds=300")
+                )
+            except Exception:
+                return name, (None, None)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_RENDER_METRICS)) as pool:
+            for name, (value, unit) in pool.map(fetch_metric, _RENDER_METRICS):
+                if value is not None:
+                    metrics[name.replace("-", "_")] = {"value": value, "unit": unit}
+        if metrics:
+            result["metrics"] = metrics
     except Exception as exc:
         app.logger.warning("Render API недоступен: %s", exc)
         result.update({"ok": False, "error": "Render API не ответил"})
@@ -1570,13 +1614,9 @@ def server_stats():
         cpu_seconds = usage.ru_utime + usage.ru_stime
     with _stats_lock:
         requests = _stats["requests"]
-        last = _stats["last_request"]
     return jsonify({"ok": True, "data": {
         "uptime_seconds": int(uptime),
         "requests": requests,
-        "last_request_at": (
-            datetime.fromtimestamp(last, tz=timezone.utc).isoformat() if last else None
-        ),
         "memory_mb": round(rss, 1) if rss is not None else None,
         "peak_memory_mb": round(peak, 1) if peak is not None else None,
         "cpu_seconds": round(cpu_seconds, 1) if cpu_seconds is not None else None,
