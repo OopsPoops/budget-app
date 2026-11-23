@@ -281,6 +281,14 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-seg{display:flex;gap:4px;padding:3px;border-radius:14px;background:var(--input-bg);border:1px solid var(--line)}
 .bd-seg button{flex:1;min-height:40px;border:0;border-radius:11px;background:transparent;color:var(--muted);font-size:15px;font-weight:700;cursor:pointer;transition:background .2s,color .2s,box-shadow .2s}
 .bd-seg button.on{background:var(--card);color:var(--text);box-shadow:0 2px 8px rgba(60,72,150,.16)}
+/* сумма и «постоянная» в одну строку; «0 ₽» — аккуратная кнопка у поля суммы */
+.bd-sumrow{display:flex;gap:8px;align-items:flex-end}
+.bd-sumrow>.field{flex:1;min-width:0}
+.bd-amt-in{display:flex;gap:6px;align-items:center}
+.bd-amt-in .value-input{flex:1;min-width:0}
+.bd-zero{flex:none;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:12px;background:var(--input-bg);color:var(--blue);font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer}
+.bd-zero:active{background:var(--card)}
+.bd-zero:disabled{opacity:.5}
 .bd-hint{margin:-2px 2px 0;font-size:12px;line-height:1.4;color:var(--muted);text-align:center}
 .value-input.bd-left{text-align:left;padding-left:14px;padding-right:14px}
 #budgetFormBackdrop input[type="month"]{overflow:hidden;padding-left:10px;padding-right:10px}
@@ -1203,7 +1211,8 @@ function showForm(cfg){
  $('bdFormBody').innerHTML=cfg.html;
  // браузер может сам подставить старые значения в поля с теми же id — сбрасываем к атрибутам
  $('bdFormBody').querySelectorAll('input').forEach(i=>{i.value=i.defaultValue;});
- $('bdFormLinks').innerHTML=cfg.links?cfg.links.map(l=>'<button class="bd-link'+(l.danger?' danger':'')+'" type="button" data-fa="'+l.id+'">'+l.text+'</button>').join(''):'';
+ const visibleLinks=cfg.links?cfg.links.filter(l=>!l.inline):null;
+ $('bdFormLinks').innerHTML=visibleLinks?visibleLinks.map(l=>'<button class="bd-link'+(l.danger?' danger':'')+'" type="button" data-fa="'+l.id+'">'+l.text+'</button>').join(''):'';
  form.label=cfg.saveLabel||'Сохранить';
  $('bdFormSave').textContent=form.label;
  form.save=cfg.onSave;
@@ -1256,9 +1265,14 @@ $('bdFormLinks').addEventListener('click',e=>{
 });
 $('bdFormBody').addEventListener('click',e=>{
  const b=e.target.closest('.bd-seg button');
- if(!b)return;
- b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
- selectionHaptic();
+ if(b){
+  b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  selectionHaptic();
+  return;
+ }
+ // кнопки-действия внутри тела формы (например «0 ₽» рядом с суммой)
+ const a=e.target.closest('[data-fa]');
+ if(a&&form.links&&form.links[a.dataset.fa])runForm(form.links[a.dataset.fa]);
 });
 $('bdFormBody').addEventListener('keydown',e=>{
  if(e.key==='Enter'&&e.target.matches('input')){e.preventDefault();e.target.blur();}
@@ -1343,10 +1357,12 @@ function toggleDone(id){
 function itemFields(it,sub){
  const perm=it?it.permanent:false;
  const isSub=sub||!!(it&&it.level===2);
+ const amt='<div class="field"><span>Сумма, ₽</span><div class="bd-amt-in"><input class="value-input" id="bdAmount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.amount):'')+'">'
+  +(it&&!it.was?'<button type="button" class="bd-zero" data-fa="zero">0 ₽</button>':'')
+  +'</div></div>';
+ const permField='<div class="field"><span>Постоянная</span><div class="bd-seg" id="bdPerm"><button type="button" data-v="1" class="'+(perm?'on':'')+'">Да</button><button type="button" data-v="0" class="'+(perm?'':'on')+'">Нет</button></div></div>';
  return '<label class="field"><span>Название</span><input class="value-input bd-left" id="bdName" type="text" maxlength="60" autocomplete="off" enterkeyhint="next" placeholder="Название статьи" value="'+esc(it?it.name:'')+'"></label>'
-  +'<label class="field"><span>Сумма, ₽</span><input class="value-input" id="bdAmount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="0" value="'+(it?amountText(it.amount):'')+'"></label>'
-  +(isSub?'':'<div class="field"><span>Постоянная статья</span><div class="bd-seg" id="bdPerm"><button type="button" data-v="1" class="'+(perm?'on':'')+'">Да</button><button type="button" data-v="0" class="'+(perm?'':'on')+'">Нет</button></div></div>'
-  +'<div class="bd-hint">«Да» — статья копируется в новые месяцы. «Нет» — только в этой зарплате.</div>')
+  +(isSub?amt:'<div class="bd-sumrow">'+amt+permField+'</div>')
   +(it&&it.was?'<div class="bd-hint">Сейчас 0 ₽ — в следующей зарплате вернётся '+money(it.was)+'.</div>':'');
 }
 function readItemForm(){
@@ -1413,7 +1429,7 @@ function openEditItem(id){
   onSave:()=>saveItem(it,null),
   links:[
    ...(isSub?[]:[{id:'addsub',text:'＋ Подстатья',run:()=>{openAddSub(it);return false;}}]),
-   ...(it.was?[]:[{id:'zero',text:'Поставить 0 ₽',run:()=>saveItem(it,0)}]),
+   {id:'zero',text:'0 ₽',inline:true,run:()=>saveItem(it,0)},
    {id:'delete',text:'Удалить запись',danger:true,run:async()=>{
      uiHaptic('error');
      const kids=(current()||{items:[]}).items.filter(x=>x.level===2&&x.parent===it.id).length;
