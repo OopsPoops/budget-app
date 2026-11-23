@@ -468,7 +468,7 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
       </button>
       <button class="st-row has-ico" id="statsOpen" type="button">
         <span class="st-ico c-sky"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 20v-6M11 20V7M16 20v-9M21 20V4"/></svg></span>
-        <span class="st-copy"><span class="st-t">Статистика</span><span class="st-s">Сервер и <a href="https://dashboard.render.com" target="_blank" rel="noopener noreferrer" id="renderDashLink" onclick="event.stopPropagation()" style="color:inherit">Render</a></span></span>
+        <span class="st-copy"><span class="st-t">Статистика</span></span>
       </button>
       <button class="st-row has-ico st-danger" id="logout" type="button">
         <span class="st-ico c-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="11.5" y="3.5" width="8" height="17" rx="1.2"/><path d="M2.5 12H15"/><path d="M11.8 8.6 15.2 12l-3.4 3.4"/><path d="M17.2 12h.6"/></svg></span>
@@ -754,8 +754,6 @@ async function openStats(){
   body.innerHTML='<div class="st-stat"><span>Загружаю…</span></div>';
   try{
     const d=await get('/api/stats');
-    const dash=d&&d.render&&typeof d.render.dashboard_url==='string'&&d.render.dashboard_url.startsWith('https://')?d.render.dashboard_url:null;
-    if(dash)$('renderDashLink').href=dash;
     body.innerHTML=statsHtml(d);
   }catch(error){
     const text=error&&error.message?String(error.message):'Ошибка';
