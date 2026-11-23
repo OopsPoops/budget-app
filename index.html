@@ -418,6 +418,13 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
 .bk-total>b{font-size:20px;font-weight:800;letter-spacing:-.4px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .bk-total small{font-size:11.5px;font-weight:600;color:var(--muted)}
 .st-foot{font-size:12.5px;line-height:1.4;color:var(--muted);padding:0 15px}
+/* статистика сервера (попап из настроек) */
+.st-stat-title{padding:12px 4px 2px;font-size:11.5px;font-weight:750;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
+.st-stat{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 4px;border-bottom:1px solid var(--line);font-size:14px}
+.st-stat:last-child{border-bottom:0}
+.st-stat>span{color:var(--muted);min-width:0}
+.st-stat>b{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.st-stat .st-warn{color:#e5484d;font-weight:700}
 </style>
 </head>
 <body>
@@ -459,6 +466,10 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
         <span class="st-ico c-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11A8 8 0 1 0 18.7 15.6"/><path d="M20 5v6h-6"/></svg></span>
         <span class="st-copy"><span class="st-t">Обновить страницу</span></span>
       </button>
+      <button class="st-row has-ico" id="statsOpen" type="button">
+        <span class="st-ico c-sky"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 20v-6M11 20V7M16 20v-9M21 20V4"/></svg></span>
+        <span class="st-copy"><span class="st-t">Статистика</span><span class="st-s">Сервер и Render</span></span>
+      </button>
       <button class="st-row has-ico st-danger" id="logout" type="button">
         <span class="st-ico c-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="11.5" y="3.5" width="8" height="17" rx="1.2"/><path d="M2.5 12H15"/><path d="M11.8 8.6 15.2 12l-3.4 3.4"/><path d="M17.2 12h.6"/></svg></span>
         <span class="st-copy"><span class="st-t">Выйти</span></span>
@@ -488,6 +499,20 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
       <button class="bd-save" id="bdFormSave" type="button">Сохранить</button>
     </div>
     <div class="bd-links" id="bdFormLinks"></div>
+  </section>
+</div>
+
+<div class="modal-backdrop" id="statsBackdrop">
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+    <div class="modal-top">
+      <div class="modal-icon">📊</div>
+      <div class="modal-title" id="statsTitle">Статистика сервера</div>
+    </div>
+    <div class="form-body" id="statsBody"></div>
+    <div class="form-actions">
+      <button class="btn-cancel" id="statsRefresh" type="button">Обновить</button>
+      <button class="bd-save" id="statsClose" type="button">Закрыть</button>
+    </div>
   </section>
 </div>
 
@@ -659,6 +684,63 @@ $('logout').addEventListener('click',async()=>{
   Budget.close();
   showLogin();
 });
+
+// ---------- статистика сервера (Render + приложение) ----------
+const statsBackdrop=$('statsBackdrop');
+function closeStats(){statsBackdrop.classList.remove('visible');}
+function pluralLocal(n,forms){
+  const a=Math.abs(n)%100,b=a%10;
+  return a>10&&a<20?forms[2]:b===1?forms[0]:b>=2&&b<=4?forms[1]:forms[2];
+}
+function fmtUptime(sec){
+  sec=Math.max(0,Math.floor(Number(sec)||0));
+  const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);
+  if(d)return d+' '+pluralLocal(d,['день','дня','дней'])+' '+h+' ч';
+  if(h)return h+' ч '+m+' мин';
+  return m+' мин';
+}
+const statRow=(label,value,cls)=>'<div class="st-stat"><span>'+label+'</span><b'+(cls?' class="'+cls+'"':'')+'>'+value+'</b></div>';
+function statsHtml(d){
+  const escV=v=>escapeHtml(String(v==null||v===''?'—':v));
+  let html='<div class="st-stat-title">Приложение</div>'
+   +statRow('Аптайм',escV(fmtUptime(d.uptime_seconds)))
+   +statRow('Запросов всего',escV((d.requests||0).toLocaleString('ru-RU')))
+   +statRow('Последний запрос',escV(d.last_request_at?new Date(d.last_request_at).toLocaleString('ru-RU'):null))
+   +statRow('Память сейчас',escV(d.memory_mb!=null?d.memory_mb+' МБ':null))
+   +statRow('Память пиковая',escV(d.peak_memory_mb!=null?d.peak_memory_mb+' МБ':null))
+   +statRow('CPU (в среднем)',escV(d.cpu_percent!=null?d.cpu_percent+'%':'—'));
+  const r=d.render||{};
+  html+='<div class="st-stat-title">Render</div>';
+  if(!r.configured){
+    html+=statRow('Статус','не настроен');
+  }else if(!r.ok){
+    html+=statRow('Статус',escV(r.error||'недоступен'),'st-warn');
+  }else{
+    html+=statRow('Сервис',escV(r.name))
+     +statRow('Состояние',r.suspended?'<span class="st-warn">На паузе</span>':'Работает')
+     +(r.region?statRow('Регион',escV(r.region)):'' )
+     +(r.plan?statRow('Тариф',escV(r.plan)):'')
+     +(r.created_at?statRow('Создан',escV(new Date(r.created_at).toLocaleDateString('ru-RU'))):'')
+     +(typeof r.dashboard_url==='string'&&r.dashboard_url.startsWith('https://')?'<div class="st-foot" style="padding-top:8px"><a href="'+escV(r.dashboard_url)+'" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">Открыть дашборд Render</a></div>':'');
+  }
+  return html;
+}
+async function openStats(){
+  statsBackdrop.classList.add('visible');
+  const body=$('statsBody');
+  body.innerHTML='<div class="st-stat"><span>Загружаю…</span></div>';
+  try{
+    const d=await get('/api/stats');
+    body.innerHTML=statsHtml(d);
+  }catch(error){
+    const text=error&&error.message?String(error.message):'Ошибка';
+    body.innerHTML='<div class="st-stat"><span>'+escapeHtml(text)+'</span></div>';
+  }
+}
+$('statsOpen').addEventListener('click',()=>{openStats();selectionHaptic();});
+$('statsClose').addEventListener('click',closeStats);
+$('statsRefresh').addEventListener('click',()=>{openStats();selectionHaptic();});
+statsBackdrop.addEventListener('click',e=>{if(e.target===e.currentTarget)closeStats();});
 
 async function boot(){
   showView('budget');
@@ -1121,6 +1203,7 @@ $('budgetFormBackdrop').addEventListener('click',e=>{if(e.target===e.currentTarg
 document.addEventListener('keydown',e=>{
  if(e.key!=='Escape')return;
  if(asking)closeSheet(null);
+ else if(statsBackdrop.classList.contains('visible'))closeStats();
  else hideForm();
 });
 $('bdFormLinks').addEventListener('click',e=>{
