@@ -210,8 +210,8 @@ button.bd-stat:active{transform:scale(.97)}
 .privacy-toggle{cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;gap:8px}
 .privacy-eye{display:none;width:18px;height:18px;color:var(--muted);flex:none}
 #screen-home.privacy .privacy-eye{display:block}
-.bd-big,.bd-stat b,.bd-extra b,.bd-lg b,.bd-mrow-top em,.bd-mrow-sub,.bd-ring-in b,.bd-sum,.bd-name b{transition:filter .25s ease}
-#screen-home.privacy .bd-big,#screen-home.privacy .bd-stat b,#screen-home.privacy .bd-extra b,#screen-home.privacy .bd-lg b,#screen-home.privacy .bd-mrow-top em,#screen-home.privacy .bd-mrow-sub,#screen-home.privacy .bd-ring-in b,#screen-home.privacy .bd-sum,#screen-home.privacy .bd-name b{filter:blur(8px)}
+.bd-big,.bd-stat b,.bd-extra b,.bd-lg b,.bd-mrow-top em,.bd-mrow-sub,.bd-ring-in b,.bd-sum,.bd-name b,.bd-once-name,.bd-once-total{transition:filter .25s ease}
+#screen-home.privacy .bd-big,#screen-home.privacy .bd-stat b,#screen-home.privacy .bd-extra b,#screen-home.privacy .bd-lg b,#screen-home.privacy .bd-mrow-top em,#screen-home.privacy .bd-mrow-sub,#screen-home.privacy .bd-ring-in b,#screen-home.privacy .bd-sum,#screen-home.privacy .bd-name b,#screen-home.privacy .bd-once-name,#screen-home.privacy .bd-once-total{filter:blur(8px)}
 
 .bd-add,.bd-month-add{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:52px;border-radius:16px;font-size:16px;font-weight:750;cursor:pointer;transition:transform .3s cubic-bezier(.34,1.5,.4,1),opacity .2s}
 .bd-add{margin-top:12px;border:0;background:linear-gradient(180deg,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 62%),var(--blue);color:var(--bd-on-accent,#fff);box-shadow:0 10px 22px -10px rgba(0,0,0,.4)}
@@ -267,6 +267,20 @@ button.bd-stat:active{transform:scale(.97)}
 .bd-mrow:not(.on) .bd-bar i{opacity:.55}
 .bd-mrow.over .bd-bar i{background:linear-gradient(90deg,#ff8c8c,#e5484d)}
 .bd-mrow-sub{margin-top:4px;font-size:12px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* будущие разовые расходы: карточка внизу главного экрана */
+.bd-once{margin-top:12px}
+.bd-once-list{border-top:1px solid var(--line)}
+.bd-once-day{padding:10px 16px 11px}
+.bd-once-day+.bd-once-day{border-top:1px solid var(--line)}
+.bd-once-date{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px}
+.bd-once-date b{font-size:14px;font-weight:700}
+.bd-once-date small{font-size:12px;font-weight:600;color:var(--muted);text-transform:capitalize}
+.bd-once-item{display:flex;align-items:center;gap:8px;padding:3px 0}
+.bd-once-name{flex:1;min-width:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bd-once-item .bd-sum{font-size:15px}
+.bd-once-sum{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line);font-size:13px;font-weight:700;color:var(--muted)}
+.bd-once-total{font-size:15px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* формы и подтверждения */
 .bd-save{flex:1;min-height:46px;font-size:16px;border:0;background:linear-gradient(180deg,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 62%),var(--blue);color:var(--bd-on-accent,#fff)}
@@ -981,6 +995,26 @@ function summaryHtml(p){
   +'<div class="bd-lg tot"><span>'+(bal<0?'Превышение':'Остаток')+'</span><b>'+signed(bal)+'</b></div></div></div>'
   +'<div class="bd-mrows">'+rows+'</div></section>';
 }
+// Ближайшие разовые расходы: все «Разовые» статьи (permanent=false) из зарплатных
+// периодов не раньше сегодняшнего дня, сгруппированные по датам, с итогами.
+function onceHtml(){
+ const today=todayIso();
+ const groups=S.state.periods
+  .filter(x=>x.pay_date>=today)
+  .map(x=>({pay_date:x.pay_date,items:x.items.filter(it=>it.level!==2&&!it.permanent)}))
+  .filter(g=>g.items.length);
+ if(!groups.length)return '<section class="bd-card bd-once"><div class="bd-card-head">Ближайшие разовые расходы</div><div class="bd-empty">Разовых расходов впереди нет.</div></section>';
+ let grand=0;
+ const days=groups.map(g=>{
+  const info=dayInfo(g.pay_date);
+  const sum=r2(g.items.reduce((a,it)=>a+it.amount,0));grand=r2(grand+sum);
+  const items=g.items.map(it=>'<div class="bd-once-item"><span class="bd-once-name">'+esc(it.name)+'</span><b class="bd-sum">'+money(it.amount)+'</b></div>').join('');
+  return '<div class="bd-once-day"><div class="bd-once-date"><b>'+info.d+' '+MONTHS_GEN[info.m-1]+'</b><small>'+WEEKDAYS[info.wd]+'</small></div>'+items
+   +'<div class="bd-once-sum"><span>Итого</span><b class="bd-once-total">'+money(sum)+'</b></div></div>';
+ }).join('');
+ return '<section class="bd-card bd-once"><div class="bd-card-head">Ближайшие разовые расходы<span class="bd-once-total">'+money(grand)+'</span></div>'
+  +'<div class="bd-once-list">'+days+'</div></section>';
+}
 const sumHtml=it=>it.was?'<s class="was">'+money(it.was)+'</s><span class="now">'+money(0)+'</span>':money(it.amount);
 const chevSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
 function rowHtml(it,childCount,open,doneEff){
@@ -1018,7 +1052,7 @@ function errorHtml(message){
 function bodyHtml(){
  const st=S.state;
  if(!st.periods.length)return firstHtml();
- if(S.ghost)return ghostHtml(S.ghost);
+ if(S.ghost)return ghostHtml(S.ghost)+onceHtml();
  const p=current()||st.periods[0];
  const tops=p.items.filter(x=>x.level!==2);          // в счётчиках и списке — только статьи
  const n=tops.length;
@@ -1050,7 +1084,8 @@ function bodyHtml(){
   +'<section class="bd-card"><div class="bd-card-head">Статьи расходов<span>'+(filterOn?'<button class="bd-fbtn" type="button" data-act="filter" aria-label="Скрыть фильтр">✕</button>':'<button class="bd-fbtn" type="button" data-act="filter" aria-label="Фильтр по статьям"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></svg></button>')+n+' '+plural(n,['статья','статьи','статей'])+(nd?' · выполнено '+nd:'')+'</span></div>'
   +(filterOn?'<div class="bd-filterrow"><input id="bdFilter" class="value-input" type="search" autocomplete="off" placeholder="Название статьи" value="'+esc(S.filter||'')+'"></div>':'')
   +'<div class="bd-list" id="bdList">'+listHtml+'</div></section>'
-  +'<button class="bd-add" type="button" data-act="add"><span class="bd-plus">+</span>Добавить статью</button>';
+  +'<button class="bd-add" type="button" data-act="add"><span class="bd-plus">+</span>Добавить статью</button>'
+  +onceHtml();
 }
 function render(){
  if(S.dragging){S.pendingRender=true;return;}
