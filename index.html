@@ -996,7 +996,7 @@ function onceHtml(){
  const rows=[];
  let grand=0;
  S.state.periods.filter(x=>x.pay_date>=today).forEach(x=>{
-  const info=dayInfo(x.pay_date),when=info.d+'.'+info.m;
+  const info=dayInfo(x.pay_date),when=String(info.d).padStart(2,'0')+'.'+String(info.m).padStart(2,'0');
   x.items.forEach(it=>{
    if(it.level===2||it.permanent)return;
    grand=r2(grand+it.amount);
