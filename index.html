@@ -712,10 +712,12 @@ function fmtMetric(x){
   if(u.includes('ms')||u.includes('millisecond'))return Math.round(n)+' мс';
   if(u.includes('second'))return n<10?(n*1000).toFixed(0)+' мс':n.toFixed(1)+' с';
   if(u.includes('percent')||u==='%'||u==='pct')return (n<=1?n*100:n).toFixed(1)+'%';
+  if(u.includes('cpu'))return (n*100).toFixed(2)+'%';
   if(u.includes('count')||u.includes('instance')||u==='')return Math.round(n).toLocaleString('ru-RU');
   return n+' '+u;
 }
 const metricPair=(a,b)=>{const x=fmtMetric(a),y=fmtMetric(b);return x==null?y:y==null?x:x+' / '+y;};
+const usagePct=(u,l)=>{const a=Number(u&&u.value),b=Number(l&&l.value);return b>0?(a/b*100):null;};
 function statsHtml(d){
   const escV=v=>escapeHtml(String(v==null||v===''?'—':v));
   let html='<div class="st-stat-title">Приложение</div>'
@@ -725,21 +727,25 @@ function statsHtml(d){
    +statRow('Память пиковая',escV(d.peak_memory_mb!=null?d.peak_memory_mb+' МБ':null))
    +statRow('CPU (в среднем)',escV(d.cpu_percent!=null?d.cpu_percent+'%':'—'));
   const r=d.render||{};
-  html+='<div class="st-stat-title">Render</div>';
+  const dashUrl=(typeof r.dashboard_url==='string'&&r.dashboard_url.startsWith('https://'))?r.dashboard_url:null;
+  html+='<div class="st-stat-title">'+(dashUrl?'<a href="'+escV(dashUrl)+'" target="_blank" rel="noopener noreferrer" style="color:inherit">Render</a>':'Render')+'</div>';
   if(!r.configured){
     html+=statRow('Статус','не настроен');
   }else if(!r.ok){
     html+=statRow('Статус',escV(r.error||'недоступен'),'st-warn');
   }else{
     const m=r.metrics||{};
-    const cpuTxt=metricPair(m.cpu,m.cpu_limit);
-    const memTxt=metricPair(m.memory,m.memory_limit);
+    const cpuPct=usagePct(m.cpu,m.cpu_limit);
+    const cpuTxt=cpuPct!=null?cpuPct.toFixed(1)+'%':metricPair(m.cpu,m.cpu_limit);
+    const memBase=metricPair(m.memory,m.memory_limit);
+    const memPct=usagePct(m.memory,m.memory_limit);
+    const memTxt=memBase==null?null:memBase+(memPct!=null?' ('+memPct.toFixed(0)+'%)':'');
     html+=(cpuTxt?statRow('CPU',escV(cpuTxt)):'')
      +(memTxt?statRow('Память',escV(memTxt)):'')
      +(m.http_latency?statRow('Задержка HTTP',escV(fmtMetric(m.http_latency))):'')
      +(m.instance_count?statRow('Инстансы',escV(fmtMetric(m.instance_count))):'')
      +(r.created_at?statRow('Создан',escV(new Date(r.created_at).toLocaleDateString('ru-RU'))):'')
-     +(typeof r.dashboard_url==='string'&&r.dashboard_url.startsWith('https://')?'<div class="st-foot" style="padding-top:8px"><a href="'+escV(r.dashboard_url)+'" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">Открыть дашборд Render</a></div>':'');
+     +(dashUrl?'<div class="st-foot" style="padding-top:8px"><a href="'+escV(dashUrl)+'" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">Открыть дашборд Render</a></div>':'');
   }
   return html;
 }
