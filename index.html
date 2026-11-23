@@ -531,7 +531,7 @@ body.keyboard-open .bottom-nav-wrap{transform:translateY(140%);opacity:0;pointer
 const $=id=>document.getElementById(id);
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function setToast(el,message,type){el.textContent=message||'';el.className='toast'+(type?' '+type:'');}
-function loadingContent(text){
+function loadingContent(text,cap){
  const row='<div class="skel-row"><i class="sk skel-dot"></i><i class="sk skel-txt"></i><i class="sk skel-amt"></i><i class="sk skel-check"></i></div>';
  return '<div class="skel-hero"><div class="skel-mrow"><i class="sk"></i><i class="sk"></i><i class="sk"></i></div>'
   +'<div class="sk skel-tabs"></div>'
@@ -541,7 +541,7 @@ function loadingContent(text){
   +'<div class="skel-card"><div class="skel-head"><i class="sk"></i><i class="sk"></i></div>'
   +'<div class="skel-list">'+row+row+row+row+'</div></div>'
   +'<div class="sk skel-add"></div><div class="sk skel-sum"></div>'
-  +'<div class="loader-cap"><span class="loader-text">'+escapeHtml(text)+'</span><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></div>';
+  +(cap===false?'':'<div class="loader-cap"><span class="loader-text">'+escapeHtml(text)+'</span><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></div>');
 }
 function hideKeyboard(){const a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur();}
 const vibrate=pattern=>{try{if(navigator.vibrate)navigator.vibrate(pattern);}catch(e){}};
@@ -769,7 +769,7 @@ async function boot(){
   showView('budget');
   $('bootBody').hidden=false;
   $('budgetBody').hidden=true;
-  $('bootBody').innerHTML=loadingContent('Загрузка…');
+  $('bootBody').innerHTML=loadingContent('Загрузка…',false);
   const wake=setTimeout(()=>{
     const label=document.querySelector('#bootBody .loader-text');
     if(label)label.textContent='Сервер просыпается, это может занять до минуты…';
