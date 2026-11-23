@@ -744,8 +744,7 @@ function statsHtml(d){
      +(memTxt?statRow('Память',escV(memTxt)):'')
      +(m.http_latency?statRow('Задержка HTTP',escV(fmtMetric(m.http_latency))):'')
      +(m.instance_count?statRow('Инстансы',escV(fmtMetric(m.instance_count))):'')
-     +(r.created_at?statRow('Создан',escV(new Date(r.created_at).toLocaleDateString('ru-RU'))):'')
-     +(dashUrl?'<div class="st-foot" style="padding-top:8px"><a href="'+escV(dashUrl)+'" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">Открыть дашборд Render</a></div>':'');
+     +(r.created_at?statRow('Создан',escV(new Date(r.created_at).toLocaleDateString('ru-RU'))):'');
   }
   return html;
 }
