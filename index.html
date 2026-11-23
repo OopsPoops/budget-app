@@ -1521,14 +1521,9 @@ function stepMonth(dir){
  const target=keyOf(ti);
  if(!have.has(target)){S.ghost=target;render();selectionHaptic();return;}   // дальше последнего месяца — пустой экран
  const inTarget=st.periods.filter(x=>x.month===target);
- let idx;
- if(S.ghost)idx=dir<0?inTarget.length-1:0;
- else{
-  const was=st.periods.filter(x=>x.month===p.month).findIndex(x=>x.pay_date===p.pay_date);
-  idx=Math.min(Math.max(was,0),inTarget.length-1);
- }
+ // вперёд — первая зарплата месяца (17-е), назад — последняя (3-е след. месяца)
  S.ghost=null;
- S.sel=inTarget[idx].pay_date;
+ S.sel=inTarget[dir<0?inTarget.length-1:0].pay_date;
  render();
  selectionHaptic();
 }
