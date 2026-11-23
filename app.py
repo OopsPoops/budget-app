@@ -1,12 +1,20 @@
 import hashlib
 import hmac
+import json
 import os
 import re
+import sys
 import threading
 import time
-from datetime import date, timedelta
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
+
+try:
+    import resource
+except ImportError:                      # Windows
+    resource = None
 
 from flask import Flask, jsonify, request, session
 from itsdangerous import BadData, URLSafeTimedSerializer
@@ -1471,6 +1479,111 @@ class BudgetStore:
             for slot, item_id in zip(items, ids)
         ])
         return True
+
+
+# ======================= Статистика сервера =======================
+# Метрики живут в памяти процесса: при нескольких воркерах gunicorn у каждого свой счётчик
+# (как и счётчик неудачных входов). Перезапуск сервиса обнуляет статистику.
+_STATS_START = time.time()
+_stats_lock = threading.Lock()
+_stats = {"requests": 0, "last_request": None}
+_RENDER_CACHE = {"at": 0.0, "data": None}
+_RENDER_TTL = 60               # ответ Render API кэшируем на минуту
+
+
+@app.before_request
+def track_request():
+    with _stats_lock:
+        _stats["requests"] += 1
+        _stats["last_request"] = time.time()
+
+
+def _memory_info():
+    """(текущий RSS, пиковый RSS) в МБ. Текущий читаем из /proc (Linux), иначе None."""
+    rss = None
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1]) / 1024          # кБ → МБ
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    peak = None
+    if resource is not None:
+        kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # ru_maxrss: на Linux — килобайты, на macOS/BSD — байты
+        peak = kb / (1024 * 1024) if sys.platform == "darwin" else kb / 1024
+    return rss, peak
+
+
+def _render_stats():
+    """Статус сервиса в Render. Нужны RENDER_API_KEY и RENDER_SERVICE_ID из окружения;
+    без них блок просто помечается «не настроен». Кэшируем на минуту — дашборд не дёргаем."""
+    api_key = os.getenv("RENDER_API_KEY", "").strip()
+    service_id = os.getenv("RENDER_SERVICE_ID", "").strip()
+    if not api_key or not service_id:
+        return {"configured": False}
+    now = time.time()
+    with _stats_lock:
+        cached = _RENDER_CACHE["data"]
+        if cached is not None and now - _RENDER_CACHE["at"] < _RENDER_TTL:
+            return cached
+    result = {"configured": True, "service_id": service_id}
+    try:
+        req = urllib.request.Request(
+            f"https://api.render.com/v1/services/{service_id}",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        svc = (payload.get("service") or payload) if isinstance(payload, dict) else {}
+        details = svc.get("serviceDetails") or {}
+        result.update({
+            "ok": True,
+            "name": svc.get("name"),
+            # Render отдаёт suspended строкой: "not_suspended" | "suspended" | "suspended_by_user"
+            "suspended": svc.get("suspended") not in (None, False, "not_suspended"),
+            "region": details.get("region"),
+            "plan": details.get("plan") or details.get("planId"),
+            "created_at": svc.get("createdAt"),
+            "dashboard_url": svc.get("dashboardUrl")
+            or f"https://dashboard.render.com/web/{service_id}",
+        })
+    except Exception as exc:
+        app.logger.warning("Render API недоступен: %s", exc)
+        result.update({"ok": False, "error": "Render API не ответил"})
+    with _stats_lock:
+        _RENDER_CACHE["at"] = now
+        _RENDER_CACHE["data"] = result
+    return result
+
+
+@app.route("/api/stats", methods=["GET", "OPTIONS"])
+@_login_required
+def server_stats():
+    uptime = max(0.0, time.time() - _STATS_START)
+    rss, peak = _memory_info()
+    cpu_seconds = None
+    if resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        cpu_seconds = usage.ru_utime + usage.ru_stime
+    with _stats_lock:
+        requests = _stats["requests"]
+        last = _stats["last_request"]
+    return jsonify({"ok": True, "data": {
+        "uptime_seconds": int(uptime),
+        "requests": requests,
+        "last_request_at": (
+            datetime.fromtimestamp(last, tz=timezone.utc).isoformat() if last else None
+        ),
+        "memory_mb": round(rss, 1) if rss is not None else None,
+        "peak_memory_mb": round(peak, 1) if peak is not None else None,
+        "cpu_seconds": round(cpu_seconds, 1) if cpu_seconds is not None else None,
+        "cpu_percent": round(cpu_seconds / uptime * 100, 1)
+        if cpu_seconds is not None and uptime >= 1 else None,
+        "render": _render_stats(),
+    }})
 
 
 # ======================= API бюджета =======================
