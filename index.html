@@ -590,6 +590,7 @@ $('themeToggle').addEventListener('click',()=>{
 
 // ---------- вход по логину и паролю (как было) ----------
 const API="https://script.google.com/macros/s/AKfycbw2S8nKASSRnuIu_gW60rnr26mUgySNp1Kk0yxG91EcId_gBSqcpErzmnrIjX98_UUb/exec";
+const API_DIRECT="https://budget-app-x2s2.onrender.com";
 const TOKEN_KEY="budget_token";
 
 function getToken(){try{return localStorage.getItem(TOKEN_KEY);}catch(e){return null;}}
@@ -603,6 +604,23 @@ function setToken(t){
 async function api(path,options={}){
   const method=(options.method||"GET").toUpperCase();
   const token=getToken();
+  // Сначала прямой запрос на Render: CORS и Bearer-токен там поддерживаются,
+  // так быстрее — без лишнего хопа через Apps Script. Если сеть или CORS не
+  // пускают (старый деплой бэкенда) — fallback на прокси.
+  try{
+    const headers={"Content-Type":"application/json"};
+    if(token)headers["Authorization"]="Bearer "+token;
+    const direct=await fetch(API_DIRECT+path,{
+      method,
+      headers,
+      body:method==="GET"?undefined:(options.body||"{}")
+    });
+    if(direct.status!==403){
+      let data=null;
+      try{data=await direct.json();}catch(e){}
+      return {status:direct.status,ok:direct.ok,data};
+    }
+  }catch(e){}
   const payload={
     method,
     path,
@@ -790,6 +808,11 @@ async function boot(){
   $('budgetBody').hidden=true;
   $('bootBody').innerHTML=loadingContent('Загрузка…');
   try{
+    // данные бюджета и корзины грузим параллельно с проверкой сессии — экономим круговой запрос
+    if(getToken()){
+      Budget.prefetch(get('/api/budget/periods').catch(()=>null));
+      if(window.BasketPrefetch)BasketPrefetch(get('/api/basket/items').catch(()=>null));
+    }
     const {ok,data}=await api('/api/me');
     if($('loginView').hidden===false)return;   // пока ждали, уже показали вход — не мешаем
     if(ok&&data&&data.authenticated)showBudget(true);  // скелетон остаётся до загрузки данных
@@ -868,7 +891,7 @@ const MONTHS=['Январь','Февраль','Март','Апрель','Май'
 const MONTHS_GEN=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WEEKDAYS=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
 const MAX_AHEAD=24;    // сколько месяцев вперёд можно добавить за раз (как на сервере)
-const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0,expanded:new Set(),filterOn:false,filter:''};
+const S={state:null,sel:null,ghost:null,busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,doneOps:0,expanded:new Set(),filterOn:false,filter:'',prefetch:null};
 const nf=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2});
 const money=n=>nf.format(n)+'\u00a0₽';
 const signed=n=>n>0?'+'+money(n):money(n);      // положительный остаток — со знаком «+»
@@ -1133,7 +1156,10 @@ async function load(spinner){
   if(!S.state&&label)label.textContent='Сервер просыпается, это может занять до минуты…';
  },6000);
  try{
-  const data=await get('/api/budget/periods');
+  // если boot уже запустил этот запрос параллельно с /api/me — берём его результат
+  let data=S.prefetch?await S.prefetch:null;
+  S.prefetch=null;
+  if(!data)data=await get('/api/budget/periods');
   if(seq!==S.seq)return;        // пока грузилось, пользователь уже что-то изменил — не затираем свежее
   adopt(data);
   render();
@@ -1615,7 +1641,7 @@ host.addEventListener('input',e=>{
 });
 
 // ---------- корзина покупок (лист bascket) ----------
-const B={items:null,deleted:[],pending:new Map(),want:new Map(),pend:new Map(),busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false};
+const B={items:null,deleted:[],pending:new Map(),want:new Map(),pend:new Map(),busy:false,loading:false,seq:0,dragging:false,pendingRender:false,noClick:false,prefetch:null};
 const basketHost=$('basketBody');
 const qtyText=q=>Number.isInteger(q)?String(q):String(Math.round(q*100)/100);
 const basketItems=()=>B.items||[];
@@ -1692,7 +1718,10 @@ async function basketLoad(){
   if(B.items===null&&label)label.textContent='Сервер просыпается, это может занять до минуты…';
  },6000);
  try{
-  const data=await get('/api/basket/items');
+  // если boot уже запустил этот запрос параллельно с /api/me — берём его результат
+  let data=B.prefetch?await B.prefetch:null;
+  B.prefetch=null;
+  if(!data)data=await get('/api/basket/items');
   if(seq!==B.seq)return;
   bkAdopt(data);
   renderBasket();
@@ -1705,6 +1734,7 @@ async function basketLoad(){
  }
 }
 window.BasketLoad=basketLoad;
+window.BasketPrefetch=p=>{B.prefetch=p;};
 function bcall(path,extra){
  return post('/api/basket/'+path,{...extra,request_id:newRequestId()});
 }
@@ -2141,6 +2171,8 @@ async function commitOrder(ids){
 // ---------- вход и выход ----------
 function formOpen(){return $('budgetFormBackdrop').classList.contains('visible');}
 window.Budget={
+ // результат запроса, запущенного в boot параллельно с /api/me — load() возьмёт его вместо нового
+ prefetch(p){S.prefetch=p;},
  open(){
   hideKeyboard();
   window.scrollTo(0,0);
@@ -2158,14 +2190,14 @@ window.Budget={
  // выход: ничего из бюджета не остаётся на экране
  close(){
   S.seq++;
-  S.state=null;S.sel=null;S.ghost=null;S.busy=false;S.dragging=false;
+  S.state=null;S.sel=null;S.ghost=null;S.busy=false;S.dragging=false;S.prefetch=null;
   S.doneOps=0;S.expanded.clear();S.filterOn=false;S.filter='';
   setSheetLink(null);
   form.busy=false;
   $('budgetFormBackdrop').classList.remove('visible');
   if(asking)closeSheet(null);
   $('budgetBody').innerHTML='';
-  B.items=null;B.deleted=[];B.pending.forEach(p=>clearTimeout(p.timer));B.pending.clear();B.want.clear();B.pend.clear();B.busy=false;B.loading=false;B.dragging=false;B.pendingRender=false;B.noClick=false;
+  B.items=null;B.deleted=[];B.pending.forEach(p=>clearTimeout(p.timer));B.pending.clear();B.want.clear();B.pend.clear();B.busy=false;B.loading=false;B.dragging=false;B.pendingRender=false;B.noClick=false;B.prefetch=null;
   $('basketBody').innerHTML='';
  }
 };
