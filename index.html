@@ -601,26 +601,37 @@ function setToken(t){
   }catch(e){}
 }
 
+// directState: 0 — ещё не пробовали, 1 — Render доступен напрямую, -1 — нет (например,
+// onrender.com заблокирован провайдером) и ходим только через прокси. Запоминаем результат,
+// чтобы не ждать таймаут на каждом запросе.
+let directState=0;
 async function api(path,options={}){
   const method=(options.method||"GET").toUpperCase();
   const token=getToken();
-  // Сначала прямой запрос на Render: CORS и Bearer-токен там поддерживаются,
-  // так быстрее — без лишнего хопа через Apps Script. Если сеть или CORS не
-  // пускают (старый деплой бэкенда) — fallback на прокси.
-  try{
-    const headers={"Content-Type":"application/json"};
-    if(token)headers["Authorization"]="Bearer "+token;
-    const direct=await fetch(API_DIRECT+path,{
-      method,
-      headers,
-      body:method==="GET"?undefined:(options.body||"{}")
-    });
-    if(direct.status!==403){
-      let data=null;
-      try{data=await direct.json();}catch(e){}
-      return {status:direct.status,ok:direct.ok,data};
+  if(directState>=0){
+    try{
+      const headers={"Content-Type":"application/json"};
+      if(token)headers["Authorization"]="Bearer "+token;
+      const ctrl=new AbortController();
+      const timer=setTimeout(()=>ctrl.abort(),20000);
+      const direct=await fetch(API_DIRECT+path,{
+        method,
+        headers,
+        body:method==="GET"?undefined:(options.body||"{}"),
+        signal:ctrl.signal
+      });
+      clearTimeout(timer);
+      if(direct.status!==403){
+        directState=1;
+        let data=null;
+        try{data=await direct.json();}catch(e){}
+        return {status:direct.status,ok:direct.ok,data};
+      }
+      directState=-1;   // 403 — origin не совпал с FRONTEND_ORIGIN, прямой путь не подходит
+    }catch(e){
+      directState=-1;   // сеть/CORS/таймаут — Render напрямую недоступен
     }
-  }catch(e){}
+  }
   const payload={
     method,
     path,
